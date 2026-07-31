@@ -3,7 +3,7 @@
 mod app;
 
 pub use app::{AppBuilder, Application, BootError, OxideApplication};
-pub use oxide_macros::{component, ConfigProperties};
+pub use oxide_macros::{component, main, ConfigProperties};
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.

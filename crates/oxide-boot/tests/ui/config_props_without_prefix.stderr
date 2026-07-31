@@ -1,0 +1,5 @@
+error: missing #[config(prefix = "...")] attribute on ConfigProperties struct
+ --> tests/ui/config_props_without_prefix.rs:4:8
+  |
+4 | struct NoPrefix {
+  |        ^^^^^^^^
