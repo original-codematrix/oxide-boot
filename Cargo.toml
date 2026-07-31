@@ -6,6 +6,7 @@ members = [
     "crates/oxide-boot",
     "crates/oxide-web",
     "crates/oxide-web-macros",
+    "crates/oxide-observability",
     "examples/hello-world",
     "examples/rest-api",
 ]
@@ -22,6 +23,7 @@ oxide-macros = { path = "crates/oxide-macros" }
 oxide-boot = { path = "crates/oxide-boot" }
 oxide-web = { path = "crates/oxide-web" }
 oxide-web-macros = { path = "crates/oxide-web-macros" }
+oxide-observability = { path = "crates/oxide-observability" }
 axum = "0.8"
 tower = "0.5"
 serde_json = "1"
@@ -39,3 +41,9 @@ quote = "1"
 proc-macro2 = "1"
 trybuild = "1"
 tempfile = "3"
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", default-features = false }
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.28"
