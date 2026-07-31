@@ -1,6 +1,6 @@
 //! Route registry and deterministic router assembly from collected RouteDescriptors.
 
-use crate::{health, server::WebServer, WebError};
+use crate::WebError;
 use axum::Router;
 use oxide_core::Context;
 
@@ -33,8 +33,10 @@ fn validate_routes(routes: &[&RouteDescriptor]) -> Result<(), WebError> {
     Ok(())
 }
 
-/// Assembles the HTTP router by collecting all registered RouteDescriptors,
-/// sorting them deterministically, and merging the health endpoints.
+/// Assembles the HTTP router by collecting all registered RouteDescriptors
+/// and sorting them deterministically. Health endpoints live on the
+/// management server (see `management.rs`), not here — the `/actuator`
+/// prefix stays reserved so user routes can't collide with it.
 pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
     let mut routes: Vec<&RouteDescriptor> = inventory::iter::<RouteDescriptor>().collect();
     routes.sort_by_key(|r| (r.path, r.method));
@@ -43,9 +45,6 @@ pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
     for route in routes {
         router = (route.register)(ctx, router)?;
         tracing::info!(method = route.method, path = route.path, "route mounted");
-    }
-    if let Some(server) = ctx.get::<WebServer>() {
-        router = router.merge(health::health_routes(server.readiness()));
     }
     Ok(router)
 }

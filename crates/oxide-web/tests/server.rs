@@ -1,5 +1,5 @@
 use oxide_boot::prelude::*;
-use oxide_web::{controller, ApiError, WebServer, RouteDescriptor, WebError};
+use oxide_web::{controller, ApiError, ManagementServer, WebServer, RouteDescriptor, WebError};
 use oxide_boot::__private::ComponentDescriptor;
 use axum::extract::{Json, Path};
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ fn test_config_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("application.yml"),
-        "oxide:\n  application:\n    name: web-test\n  server:\n    port: 0\n",
+        "oxide:\n  application:\n    name: web-test\n  server:\n    port: 0\n  management:\n    port: 0\n",
     )
     .unwrap();
     dir
@@ -24,7 +24,8 @@ async fn boots_serves_health_and_shuts_down() {
 
     let server = app.context().get::<WebServer>().unwrap();
     let addr = server.local_addr().expect("server started");
-    let base = format!("http://{addr}");
+    let mgmt_addr = app.context().get::<ManagementServer>().unwrap().local_addr().expect("management server started");
+    let base = format!("http://{mgmt_addr}");
 
     let live: serde_json::Value =
         reqwest::get(format!("{base}/actuator/health/liveness")).await.unwrap().json().await.unwrap();
@@ -34,8 +35,33 @@ async fn boots_serves_health_and_shuts_down() {
     assert_eq!(ready.status(), 200);
 
     app.stop().await.unwrap();
-    assert!(reqwest::get(format!("{base}/actuator/health")).await.is_err(), "server must be down after stop");
+    assert!(reqwest::get(format!("{base}/actuator/health")).await.is_err(), "management server must be down after stop");
     assert!(server.local_addr().is_none(), "local_addr must be None after pre_destroy tears down the server");
+    assert!(mgmt_addr.port() != addr.port(), "management server must not share the main port");
+}
+
+#[tokio::test]
+async fn actuator_lives_on_management_port_not_main_port() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let main_addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
+    let mgmt_addr = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
+    assert_ne!(main_addr.port(), mgmt_addr.port());
+
+    let health = reqwest::get(format!("http://{mgmt_addr}/actuator/health")).await.unwrap();
+    assert_eq!(health.status(), 200);
+
+    let on_main = reqwest::get(format!("http://{main_addr}/actuator/health")).await.unwrap();
+    assert_eq!(on_main.status(), 404, "actuator must be gone from the main port");
+
+    let info: serde_json::Value =
+        reqwest::get(format!("http://{mgmt_addr}/actuator/info")).await.unwrap().json().await.unwrap();
+    assert_eq!(info["application"]["name"], "web-test");
+    assert_eq!(info["framework"]["name"], "oxide-boot");
+    assert_eq!(info["framework"]["version"], env!("CARGO_PKG_VERSION"));
+
+    app.stop().await.unwrap();
 }
 
 // Hand-written route descriptor test (macro-generated version comes in Task 6)

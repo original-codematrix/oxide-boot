@@ -19,7 +19,12 @@ impl GhostController {
 #[tokio::test]
 async fn unregistered_controller_fails_boot_with_typed_error() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("application.yml"), "oxide:\n  server:\n    port: 0\n").unwrap();
+    // management.port: 0 too — ManagementServer's post_construct runs before
+    // WebServer's (alphabetical tie-break) and would otherwise bind the real
+    // 8081 default and leak it: this test's boot fails before `stop()` ever
+    // runs to tear it back down.
+    std::fs::write(dir.path().join("application.yml"), "oxide:\n  server:\n    port: 0\n  management:\n    port: 0\n")
+        .unwrap();
     let err = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("GhostController") && msg.contains("not registered"), "was: {msg}");

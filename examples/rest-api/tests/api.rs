@@ -5,7 +5,10 @@ use std::collections::HashMap;
 
 #[tokio::test]
 async fn create_fetch_and_missing_note_flow() {
-    let env = HashMap::from([("OXIDE_SERVER_PORT".to_string(), "0".to_string())]); // env override, dogfooded
+    let env = HashMap::from([
+        ("OXIDE_SERVER_PORT".to_string(), "0".to_string()), // env override, dogfooded
+        ("OXIDE_MANAGEMENT_PORT".to_string(), "0".to_string()), // avoid colliding on the real 8081 default
+    ]);
     let app = OxideApplication::builder().base_dir(env!("CARGO_MANIFEST_DIR")).env(env).start().await.unwrap();
     let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
     let base = format!("http://{addr}/api/notes");

@@ -1,11 +1,11 @@
 //! `ServerProps` configuration and the `WebServer` lifecycle component:
 //! binds a TCP listener, serves an axum `Router`, and shuts down gracefully.
 
+use crate::serve::HttpServing;
 use oxide_core::{ComponentDescriptor, ComponentResult, Context};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
 
 fn default_port() -> u16 {
     8080
@@ -31,35 +31,29 @@ impl Default for ServerProps {
     }
 }
 
-struct ServerRuntime {
-    shutdown: Option<oneshot::Sender<()>>,
-    handle: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
-}
-
 /// HTTP server lifecycle component. Binds on `post_construct`, drains and
 /// shuts down on `pre_destroy`.
 pub struct WebServer {
-    props: ServerProps,
     readiness: Arc<AtomicBool>,
-    runtime: Mutex<ServerRuntime>,
-    // local_addr readable without awaiting the runtime lock:
-    addr: std::sync::Mutex<Option<SocketAddr>>,
+    serving: HttpServing,
 }
 
 impl WebServer {
     fn new(props: ServerProps) -> Self {
         Self {
-            props,
             readiness: Arc::new(AtomicBool::new(false)),
-            runtime: Mutex::new(ServerRuntime { shutdown: None, handle: None }),
-            addr: std::sync::Mutex::new(None),
+            serving: HttpServing::new(
+                props.port,
+                "HTTP server",
+                std::time::Duration::from_secs(props.shutdown_grace_seconds),
+            ),
         }
     }
 
     /// The bound local address, once the server has started. `None` before
     /// `post_construct` runs or after `pre_destroy` has torn it down.
     pub fn local_addr(&self) -> Option<SocketAddr> {
-        *self.addr.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.serving.local_addr()
     }
 
     /// Shared readiness flag, handed to the health routes.
@@ -68,58 +62,14 @@ impl WebServer {
     }
 
     async fn start(&self, router: axum::Router) -> ComponentResult<()> {
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", self.props.port))
-            .await
-            .map_err(|source| crate::WebError::Bind { port: self.props.port, source })?;
-        let local_addr = listener
-            .local_addr()
-            .map_err(|source| crate::WebError::Bind { port: self.props.port, source })?;
-        let (tx, rx) = oneshot::channel::<()>();
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = rx.await;
-                })
-                .await
-        });
-        {
-            let mut rt = self.runtime.lock().await;
-            rt.shutdown = Some(tx);
-            rt.handle = Some(handle);
-        }
-        *self.addr.lock().unwrap_or_else(|p| p.into_inner()) = Some(local_addr);
+        self.serving.start(router).await?;
         self.readiness.store(true, Ordering::SeqCst);
-        tracing::info!(port = local_addr.port(), "HTTP server listening");
         Ok(())
     }
 
     async fn stop_server(&self) -> ComponentResult<()> {
         self.readiness.store(false, Ordering::SeqCst);
-        *self.addr.lock().unwrap_or_else(|p| p.into_inner()) = None;
-        let (shutdown, handle) = {
-            let mut rt = self.runtime.lock().await;
-            (rt.shutdown.take(), rt.handle.take())
-        };
-        if let Some(tx) = shutdown {
-            let _ = tx.send(());
-        }
-        if let Some(mut handle) = handle {
-            let grace = std::time::Duration::from_secs(self.props.shutdown_grace_seconds);
-            match tokio::time::timeout(grace, &mut handle).await {
-                Ok(join) => {
-                    join.map_err(|e| format!("server task panicked: {e}"))??;
-                    tracing::info!("HTTP server stopped");
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        grace_seconds = self.props.shutdown_grace_seconds,
-                        "HTTP server drain timed out"
-                    );
-                    handle.abort();
-                }
-            }
-        }
-        Ok(())
+        self.serving.stop().await
     }
 }
 
