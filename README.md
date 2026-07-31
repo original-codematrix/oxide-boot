@@ -42,6 +42,27 @@ greeter:
 
 Run the example: `cd examples/hello-world && cargo run`
 
+## Web (oxide-web)
+
+Add `oxide-web` as a dependency and your application gains an HTTP server for
+free: `/actuator/health` (and `/actuator/health/liveness`, `/actuator/health/readiness`)
+are wired in automatically, and any `#[component]` you annotate with
+`#[controller("/base/path")]` gets its routes mounted on boot. Errors that
+implement `IntoProblemDetail` (or are constructed via `ApiError`) render as
+RFC 7807 `application/problem+json` responses.
+
+```rust
+#[controller("/api/notes")]
+impl NotesController {
+    #[get("/{id}")]
+    async fn get_by_id(&self, id: Path<u32>) -> Result<Json<Note>, ApiError> {
+        self.store.find(*id).map(Json).ok_or_else(ApiError::not_found)
+    }
+}
+```
+
+Run the example: `cd examples/rest-api && cargo run`
+
 ## Environment overrides
 
 An env var `OXIDE_A_B` binds in this order: (1) an existing key under
@@ -65,3 +86,7 @@ only once at least one existing level was matched.
 | Env relaxed binding | `OXIDE_SERVER_PORT` -> `oxide.server.port` |
 | `SpringApplication.run(...)` | `OxideApplication::run().await` |
 | `@SpringBootApplication` main | `#[oxide_boot::main]` |
+| `@RestController` | `#[controller("/api/…")]` on an `impl` block |
+| `@GetMapping("/x")` | `#[get("/x")]` |
+| `@ExceptionHandler` / `ResponseEntity` error | `ApiError` (RFC 7807 `application/problem+json`) |
+| Spring Actuator health | `/actuator/health` (+ `/liveness`, `/readiness`) |

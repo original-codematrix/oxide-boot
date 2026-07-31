@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn problem_detail_serializes_rfc7807_shape_and_skips_empty_fields() {
         let err = ApiError::not_found();
-        let json = serde_json::to_value(&err.problem()).unwrap();
+        let json = serde_json::to_value(err.problem()).unwrap();
         assert_eq!(json["type"], "about:blank");
         assert_eq!(json["title"], "Not Found");
         assert_eq!(json["status"], 404);
@@ -127,7 +127,7 @@ mod tests {
         let err = ApiError::bad_request("email is malformed")
             .with_type("https://errors.example.com/validation")
             .with_instance("/api/users");
-        let json = serde_json::to_value(&err.problem()).unwrap();
+        let json = serde_json::to_value(err.problem()).unwrap();
         assert_eq!(json["status"], 400);
         assert_eq!(json["detail"], "email is malformed");
         assert_eq!(json["type"], "https://errors.example.com/validation");
