@@ -51,6 +51,7 @@ impl AppConfig {
                 }
             }
         }
+        apply_env_overrides(&mut root, env);
         Ok(Self { root, profiles })
     }
 
@@ -77,6 +78,66 @@ impl AppConfig {
             Value::Mapping(map) => map.get(&Value::String(segment.to_string())),
             _ => None,
         })
+    }
+}
+
+/// Case-insensitive comparison key: lowercased, `-` and `_` stripped.
+fn normalize(key: &str) -> String {
+    key.chars()
+        .filter(|c| *c != '-' && *c != '_')
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
+    for (name, raw) in env {
+        if !name.starts_with("OXIDE_") || name == "OXIDE_PROFILES_ACTIVE" {
+            continue;
+        }
+        let segments: Vec<String> = name.split('_').map(|s| s.to_ascii_lowercase()).collect();
+        // Parse the value as a YAML scalar so "9090" becomes a number, "true" a bool.
+        let value: Value = serde_yaml_ng::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()));
+        set_relaxed(root, &segments, value);
+    }
+}
+
+/// Walks/creates the tree for the given env-var segments. At each level it
+/// greedily tries to match the longest run of segments against an existing
+/// key (normalized), so `KAFKA_BOOTSTRAP_SERVERS` binds to `bootstrap-servers`.
+/// Unknown paths are created with one mapping level per segment.
+fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
+    if segments.is_empty() {
+        return;
+    }
+    if !matches!(node, Value::Mapping(_)) {
+        *node = Value::Mapping(Default::default());
+    }
+    let Value::Mapping(map) = node else { unreachable!() };
+
+    for take in (1..=segments.len()).rev() {
+        let candidate = normalize(&segments[..take].join(""));
+        let existing = map
+            .keys()
+            .find(|k| matches!(k, Value::String(s) if normalize(s) == candidate))
+            .cloned();
+        if let Some(key) = existing {
+            if take == segments.len() {
+                map.insert(key, value);
+            } else {
+                set_relaxed(map.get_mut(&key).expect("key just found"), &segments[take..], value);
+            }
+            return;
+        }
+    }
+
+    let head = Value::String(segments[0].clone());
+    if segments.len() == 1 {
+        map.insert(head, value);
+    } else {
+        if map.get(&head).is_none() {
+            map.insert(head.clone(), Value::Mapping(Default::default()));
+        }
+        set_relaxed(map.get_mut(&head).expect("just inserted"), &segments[1..], value);
     }
 }
 
@@ -150,5 +211,43 @@ mod tests {
         write(dir.path(), "application.yml", "a: [unclosed\n");
         let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
         assert!(err.to_string().contains("application.yml"), "was: {err}");
+    }
+
+    #[test]
+    fn env_var_overrides_existing_key_with_typed_value() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "oxide:\n  server:\n    port: 8080\n");
+        let env = HashMap::from([("OXIDE_SERVER_PORT".into(), "9090".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert_eq!(cfg.get::<u16>("oxide.server.port").unwrap(), 9090);
+    }
+
+    #[test]
+    fn env_var_binds_to_hyphenated_key_via_relaxed_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "oxide:\n  kafka:\n    bootstrap-servers: \"localhost:9092\"\n");
+        let env = HashMap::from([("OXIDE_KAFKA_BOOTSTRAP_SERVERS".into(), "kafka:9092".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert_eq!(cfg.get::<String>("oxide.kafka.bootstrap-servers").unwrap(), "kafka:9092");
+    }
+
+    #[test]
+    fn env_var_for_unknown_key_creates_one_level_per_segment() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = HashMap::from([("OXIDE_FEATURE_ENABLED".into(), "true".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert_eq!(cfg.get::<bool>("oxide.feature.enabled").unwrap(), true);
+    }
+
+    #[test]
+    fn non_oxide_env_vars_and_profiles_var_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = HashMap::from([
+            ("PATH".into(), "/usr/bin".into()),
+            ("OXIDE_PROFILES_ACTIVE".into(), "prod".into()),
+        ]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert!(cfg.get_opt::<String>("path").unwrap().is_none());
+        assert!(cfg.get_opt::<String>("oxide.profiles.active").unwrap().is_none());
     }
 }
