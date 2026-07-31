@@ -111,3 +111,45 @@ async fn component_macro_wires_dependencies_and_runs_post_construct() {
     assert_eq!(GREETER_INIT_COUNT.load(Ordering::SeqCst) - before, 1);
     app.stop().await.unwrap();
 }
+
+static OPEN_COUNT: AtomicUsize = AtomicUsize::new(0);
+static CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[component(post_construct = open, pre_destroy = close)]
+struct Connection {
+    #[default]
+    _marker: (),
+}
+
+impl Connection {
+    async fn open(&self) -> ComponentResult<()> {
+        OPEN_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn close(&self) -> ComponentResult<()> {
+        CLOSE_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn component_macro_wires_combined_post_construct_and_pre_destroy() {
+    let _guard = BOOT_LOCK.lock().unwrap();
+    // Same rationale as the other tests: `Connection` is process-global via
+    // `inventory`, so every boot in this binary constructs it. Snapshot both
+    // counters and assert on the delta caused by this test's own boot/stop.
+    let open_before = OPEN_COUNT.load(Ordering::SeqCst);
+    let close_before = CLOSE_COUNT.load(Ordering::SeqCst);
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("application.yml"), "oxide: {}\n").unwrap();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+
+    assert!(app.context().get::<Connection>().is_some());
+    assert_eq!(OPEN_COUNT.load(Ordering::SeqCst) - open_before, 1);
+    assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst) - close_before, 0);
+
+    app.stop().await.unwrap();
+    assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst) - close_before, 1);
+}
