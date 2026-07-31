@@ -33,10 +33,24 @@ fn validate_routes(routes: &[&RouteDescriptor]) -> Result<(), WebError> {
     Ok(())
 }
 
+/// A cross-cutting layer applied to the fully-mounted router (e.g. metrics,
+/// tracing). `apply` receives the router with all `RouteDescriptor`s already
+/// mounted — this is required for axum's `MatchedPath` extension to be
+/// visible to any `middleware::from_fn` the layer installs. Collected layers
+/// are applied in ascending `name` order for deterministic behavior when
+/// several layers are present.
+pub struct RouterLayer {
+    pub name: &'static str,
+    pub apply: fn(Router) -> Router,
+}
+
+inventory::collect!(RouterLayer);
+
 /// Assembles the HTTP router by collecting all registered RouteDescriptors
 /// and sorting them deterministically. Health endpoints live on the
 /// management server (see `management.rs`), not here — the `/actuator`
-/// prefix stays reserved so user routes can't collide with it.
+/// prefix stays reserved so user routes can't collide with it. Registered
+/// `RouterLayer`s are applied last, after every route is mounted.
 pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
     let mut routes: Vec<&RouteDescriptor> = inventory::iter::<RouteDescriptor>().collect();
     routes.sort_by_key(|r| (r.path, r.method));
@@ -46,6 +60,14 @@ pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
         router = (route.register)(ctx, router)?;
         tracing::info!(method = route.method, path = route.path, "route mounted");
     }
+
+    let mut layers: Vec<&RouterLayer> = inventory::iter::<RouterLayer>().collect();
+    layers.sort_by_key(|l| l.name);
+    for layer in layers {
+        router = (layer.apply)(router);
+        tracing::debug!(name = layer.name, "router layer applied");
+    }
+
     Ok(router)
 }
 

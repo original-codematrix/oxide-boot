@@ -10,7 +10,7 @@ mod serve;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
 pub use management::{ManagementProps, ManagementRoute, ManagementServer};
 pub use oxide_web_macros::controller;
-pub use routing::RouteDescriptor;
+pub use routing::{RouteDescriptor, RouterLayer};
 pub use server::{ServerProps, WebServer};
 
 /// Internal re-exports used by generated macro code. Not part of the

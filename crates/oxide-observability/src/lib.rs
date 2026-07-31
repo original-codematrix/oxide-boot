@@ -7,6 +7,7 @@
 //! application render on demand via [`prometheus_handle`].
 
 mod actuator;
+mod http;
 mod logging;
 mod metrics;
 

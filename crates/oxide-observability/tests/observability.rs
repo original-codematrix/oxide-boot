@@ -4,6 +4,17 @@ use std::collections::HashMap;
 
 static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[oxide_boot::component]
+struct PingController {}
+
+#[oxide_web::controller("/ping")]
+impl PingController {
+    #[get("/{name}")]
+    async fn ping(&self, name: axum::extract::Path<String>) -> String {
+        format!("pong {}", *name)
+    }
+}
+
 fn test_config_dir(extra: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -48,6 +59,23 @@ async fn prometheus_endpoint_scrapes_custom_metrics() {
     assert_eq!(res.status(), 200);
     assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/plain"));
     assert!(res.text().await.unwrap().contains("scrape_probe_total"));
+
+    app.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn http_requests_are_measured_with_route_template_labels() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir("  server:\n    port: 0\n  management:\n    port: 0\n");
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let main = app.context().get::<oxide_web::WebServer>().unwrap().local_addr().unwrap();
+    let mgmt = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
+
+    reqwest::get(format!("http://{main}/ping/world")).await.unwrap();
+    let scrape = reqwest::get(format!("http://{mgmt}/actuator/prometheus")).await.unwrap().text().await.unwrap();
+    assert!(scrape.contains("http_server_requests_seconds"), "scrape: {scrape}");
+    assert!(scrape.contains("uri=\"/ping/{name}\""), "route template label missing: {scrape}");
+    assert!(scrape.contains("status=\"200\""), "scrape: {scrape}");
 
     app.stop().await.unwrap();
 }
