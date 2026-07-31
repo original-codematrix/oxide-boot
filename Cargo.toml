@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/oxide-core",
+    "crates/oxide-macros",
+    "crates/oxide-boot",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+oxide-core = { path = "crates/oxide-core" }
+oxide-macros = { path = "crates/oxide-macros" }
+oxide-boot = { path = "crates/oxide-boot" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml_ng = "0.10"
+inventory = "0.3"
+thiserror = "2"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+trybuild = "1"
+tempfile = "3"
