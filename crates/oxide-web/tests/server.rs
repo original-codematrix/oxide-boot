@@ -36,6 +36,10 @@ async fn boots_serves_health_and_shuts_down() {
 
     app.stop().await.unwrap();
     assert!(reqwest::get(format!("{base}/actuator/health")).await.is_err(), "management server must be down after stop");
+    assert!(
+        reqwest::get(format!("http://{addr}/")).await.is_err(),
+        "main server must refuse connections after stop"
+    );
     assert!(server.local_addr().is_none(), "local_addr must be None after pre_destroy tears down the server");
     assert!(mgmt_addr.port() != addr.port(), "management server must not share the main port");
 }
