@@ -163,15 +163,51 @@ fn deep_merge(base: &mut Value, overlay: Value) {
 
 /// Resolves `${key.path}` / `${key.path:default}` inside all string scalars.
 /// Runs up to 5 passes so placeholders may reference values that themselves
-/// contain placeholders.
+/// contain placeholders. After all passes, scans the tree for any remaining
+/// `${...}` patterns and returns ConfigError::Placeholder if found (catches
+/// cycles, self-references, and budget exhaustion).
 fn resolve_placeholders(root: &mut Value) -> Result<(), ConfigError> {
     for _ in 0..5 {
         let snapshot = root.clone();
         let mut changed = false;
         substitute_strings(root, &snapshot, &mut changed)?;
         if !changed {
-            return Ok(());
+            break;
         }
+    }
+    // Check for any remaining unresolved placeholders (cycles, self-references, budget exhaustion)
+    check_resolved(root)?;
+    Ok(())
+}
+
+/// Recursively scans the tree for any string still containing `${`.
+/// If found, returns ConfigError::Placeholder with the unresolved placeholder text.
+fn check_resolved(node: &Value) -> Result<(), ConfigError> {
+    match node {
+        Value::Mapping(map) => {
+            for (_, v) in map.iter() {
+                check_resolved(v)?;
+            }
+        }
+        Value::Sequence(seq) => {
+            for v in seq.iter() {
+                check_resolved(v)?;
+            }
+        }
+        Value::String(s) if s.contains("${") => {
+            // Extract the first placeholder from the string for the error message
+            if let Some(start) = s.find("${") {
+                let after = &s[start + 2..];
+                if let Some(end) = after.find('}') {
+                    let placeholder = &after[..end];
+                    return Err(ConfigError::Placeholder { placeholder: placeholder.to_string() });
+                } else {
+                    // Malformed: no closing `}`
+                    return Err(ConfigError::Placeholder { placeholder: after.to_string() });
+                }
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -364,6 +400,22 @@ mod tests {
     fn unresolvable_placeholder_without_default_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         write(dir.path(), "application.yml", "url: \"${nope.nope}\"\n");
+        let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
+        assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
+    }
+
+    #[test]
+    fn self_referencing_placeholder_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "a: \"${a}\"\n");
+        let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
+        assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
+    }
+
+    #[test]
+    fn mutually_referencing_placeholders_are_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "a: \"${b}\"\nb: \"${a}\"\n");
         let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
         assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
     }
