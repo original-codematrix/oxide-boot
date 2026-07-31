@@ -1,10 +1,22 @@
+use oxide_boot::component;
 use oxide_boot::prelude::*;
 use oxide_boot::__private::{ComponentDescriptor, Context};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-static STARTED: AtomicBool = AtomicBool::new(false);
-static STOPPED: AtomicBool = AtomicBool::new(false);
+// `inventory` registration is process-global: every `#[tokio::test]` in this
+// binary that calls `.start()` constructs ALL components registered anywhere
+// in this file, not just the ones declared for that particular test. Cargo
+// runs tests in parallel by default, so two boots can race on these shared
+// statics. We therefore (a) serialize the boot/assert/stop lifecycle across
+// tests with BOOT_LOCK, and (b) track hook invocations as counters and
+// assert on the delta caused by *this* test's own boot, rather than on
+// absolute state — the absolute state can already reflect another test's
+// boot that ran earlier (in either order; ordering is not guaranteed once
+// tests race for BOOT_LOCK).
+static STARTED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static STOPPED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct Probe;
 
@@ -19,11 +31,11 @@ inventory::submit! {
             Ok(())
         },
         post_construct: Some(|_ctx: &Context| Box::pin(async {
-            STARTED.store(true, Ordering::SeqCst);
+            STARTED_COUNT.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })),
         pre_destroy: Some(|_ctx: &Context| Box::pin(async {
-            STOPPED.store(true, Ordering::SeqCst);
+            STOPPED_COUNT.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })),
     }
@@ -31,6 +43,10 @@ inventory::submit! {
 
 #[tokio::test]
 async fn boots_reads_config_runs_hooks_and_stops() {
+    let _guard = BOOT_LOCK.lock().unwrap();
+    let started_before = STARTED_COUNT.load(Ordering::SeqCst);
+    let stopped_before = STOPPED_COUNT.load(Ordering::SeqCst);
+
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("application.yml"), "oxide:\n  application:\n    name: probe-app\n").unwrap();
 
@@ -44,9 +60,54 @@ async fn boots_reads_config_runs_hooks_and_stops() {
     let cfg = app.context().get::<AppConfig>().unwrap();
     assert_eq!(cfg.get::<String>("oxide.application.name").unwrap(), "probe-app");
     assert!(app.context().get::<Probe>().is_some());
-    assert!(STARTED.load(Ordering::SeqCst));
-    assert!(!STOPPED.load(Ordering::SeqCst));
+    assert_eq!(STARTED_COUNT.load(Ordering::SeqCst) - started_before, 1);
+    assert_eq!(STOPPED_COUNT.load(Ordering::SeqCst) - stopped_before, 0);
 
     app.stop().await.unwrap();
-    assert!(STOPPED.load(Ordering::SeqCst));
+    assert_eq!(STOPPED_COUNT.load(Ordering::SeqCst) - stopped_before, 1);
+}
+
+static GREETER_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[component]
+struct Clock {
+    #[default]
+    ticks: std::sync::atomic::AtomicUsize,
+}
+
+#[component(post_construct = init)]
+struct Greeter {
+    clock: Clock,
+}
+
+impl Greeter {
+    async fn init(&self) -> ComponentResult<()> {
+        GREETER_INIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn greet(&self) -> String {
+        self.clock.ticks.fetch_add(1, Ordering::SeqCst);
+        "hello".to_string()
+    }
+}
+
+#[tokio::test]
+async fn component_macro_wires_dependencies_and_runs_post_construct() {
+    let _guard = BOOT_LOCK.lock().unwrap();
+    // Even serialized against the other test, this app's own boot also
+    // constructs Greeter, which is process-global via `inventory`. Snapshot
+    // the counter before this boot and assert on the delta rather than an
+    // absolute value, so this test doesn't depend on whether it runs before
+    // or after `boots_reads_config_runs_hooks_and_stops`.
+    let before = GREETER_INIT_COUNT.load(Ordering::SeqCst);
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("application.yml"), "oxide: {}\n").unwrap();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+
+    let greeter = app.context().get::<Greeter>().unwrap();
+    assert_eq!(greeter.greet(), "hello");
+    assert_eq!(GREETER_INIT_COUNT.load(Ordering::SeqCst) - before, 1);
+    app.stop().await.unwrap();
 }

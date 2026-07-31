@@ -3,6 +3,7 @@
 mod app;
 
 pub use app::{AppBuilder, Application, BootError, OxideApplication};
+pub use oxide_macros::component;
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.
@@ -16,4 +17,5 @@ pub mod __private {
 pub mod prelude {
     pub use crate::{Application, BootError, OxideApplication};
     pub use oxide_core::{AppConfig, ComponentResult, Inject};
+    pub use oxide_macros::component;
 }
