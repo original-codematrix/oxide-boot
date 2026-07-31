@@ -193,3 +193,25 @@ async fn config_properties_are_bound_and_injectable() {
     assert_eq!(gw.props.retries, 0);
     app.stop().await.unwrap();
 }
+
+#[derive(ConfigProperties, serde::Deserialize, Default)]
+#[config(prefix = "optional-section", default)]
+struct OptionalProps {
+    #[serde(default)]
+    flag: bool,
+}
+
+#[component]
+struct OptionalConsumer {
+    props: OptionalProps,
+}
+
+#[tokio::test]
+async fn config_properties_with_default_tolerate_missing_section() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir(); // contains NO `optional-section:` key — that is the point
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let consumer = app.context().get::<OptionalConsumer>().unwrap();
+    assert!(!consumer.props.flag);
+    app.stop().await.unwrap();
+}

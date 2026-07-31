@@ -16,18 +16,13 @@ fn default_grace() -> u64 {
 
 /// Configuration bound to the `oxide.server` prefix. The section may be
 /// absent entirely (falls back to `Default`).
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties, Default)]
+#[config(prefix = "oxide.server", default)]
 pub struct ServerProps {
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(rename = "shutdown-grace-seconds", default = "default_grace")]
     pub shutdown_grace_seconds: u64,
-}
-
-impl Default for ServerProps {
-    fn default() -> Self {
-        Self { port: default_port(), shutdown_grace_seconds: default_grace() }
-    }
 }
 
 struct ServerRuntime {
@@ -120,27 +115,6 @@ impl WebServer {
         }
         Ok(())
     }
-}
-
-inventory::submit! {
-    ComponentDescriptor::builder(
-        "ServerProps",
-        std::any::TypeId::of::<ServerProps>,
-        |b| {
-            let config = b.resolve::<oxide_core::AppConfig>()?;
-            let props: ServerProps = config
-                .get_opt("oxide.server")
-                .map_err(|e| oxide_core::ContextError::Construct {
-                    type_name: "ServerProps",
-                    message: format!("binding prefix 'oxide.server': {e}"),
-                })?
-                .unwrap_or_default();
-            b.insert(props);
-            Ok(())
-        },
-    )
-    .deps(|| vec![(std::any::TypeId::of::<oxide_core::AppConfig>(), "AppConfig")])
-    .build()
 }
 
 inventory::submit! {
