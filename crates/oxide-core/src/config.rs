@@ -52,6 +52,7 @@ impl AppConfig {
             }
         }
         apply_env_overrides(&mut root, env);
+        resolve_placeholders(&mut root)?;
         Ok(Self { root, profiles })
     }
 
@@ -74,10 +75,7 @@ impl AppConfig {
     }
 
     fn lookup(&self, path: &str) -> Option<&Value> {
-        path.split('.').try_fold(&self.root, |node, segment| match node {
-            Value::Mapping(map) => map.get(&Value::String(segment.to_string())),
-            _ => None,
-        })
+        lookup_path(&self.root, path)
     }
 }
 
@@ -160,6 +158,79 @@ fn deep_merge(base: &mut Value, overlay: Value) {
             }
         }
         (base_slot, overlay) => *base_slot = overlay,
+    }
+}
+
+/// Resolves `${key.path}` / `${key.path:default}` inside all string scalars.
+/// Runs up to 5 passes so placeholders may reference values that themselves
+/// contain placeholders.
+fn resolve_placeholders(root: &mut Value) -> Result<(), ConfigError> {
+    for _ in 0..5 {
+        let snapshot = root.clone();
+        let mut changed = false;
+        substitute_strings(root, &snapshot, &mut changed)?;
+        if !changed {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn substitute_strings(node: &mut Value, snapshot: &Value, changed: &mut bool) -> Result<(), ConfigError> {
+    match node {
+        Value::Mapping(map) => {
+            for (_, v) in map.iter_mut() {
+                substitute_strings(v, snapshot, changed)?;
+            }
+        }
+        Value::Sequence(seq) => {
+            for v in seq.iter_mut() {
+                substitute_strings(v, snapshot, changed)?;
+            }
+        }
+        Value::String(s) if s.contains("${") => {
+            let mut result = String::with_capacity(s.len());
+            let mut rest = s.as_str();
+            while let Some(start) = rest.find("${") {
+                result.push_str(&rest[..start]);
+                let after = &rest[start + 2..];
+                let end = after.find('}').ok_or_else(|| ConfigError::Placeholder { placeholder: after.to_string() })?;
+                let inner = &after[..end];
+                let (key, default) = match inner.split_once(':') {
+                    Some((k, d)) => (k, Some(d)),
+                    None => (inner, None),
+                };
+                let looked_up = lookup_path(snapshot, key).map(value_to_string);
+                match looked_up.or_else(|| default.map(str::to_string)) {
+                    Some(replacement) => result.push_str(&replacement),
+                    None => return Err(ConfigError::Placeholder { placeholder: inner.to_string() }),
+                }
+                rest = &after[end + 1..];
+            }
+            result.push_str(rest);
+            if &result != s {
+                *changed = true;
+                *s = result;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn lookup_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(root, |node, segment| match node {
+        Value::Mapping(map) => map.get(&Value::String(segment.to_string())),
+        _ => None,
+    })
+}
+
+fn value_to_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => serde_yaml_ng::to_string(other).unwrap_or_default().trim_end().to_string(),
     }
 }
 
@@ -270,5 +341,30 @@ mod tests {
         // Original scalar is replaced by a mapping; oxide.server is now a mapping {port: 9090},
         // not the scalar "legacy-connection-string". Attempting to deserialize as string fails.
         assert!(matches!(cfg.get::<String>("oxide.server"), Err(ConfigError::Deserialize { .. })));
+    }
+
+    #[test]
+    fn placeholder_resolves_against_other_key() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml",
+            "oxide:\n  application:\n    name: user-service\nkafka-group: \"${oxide.application.name}-group\"\n");
+        let cfg = AppConfig::load(dir.path(), &HashMap::new()).unwrap();
+        assert_eq!(cfg.get::<String>("kafka-group").unwrap(), "user-service-group");
+    }
+
+    #[test]
+    fn placeholder_uses_default_when_key_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "url: \"${billing.url:http://localhost:8081}\"\n");
+        let cfg = AppConfig::load(dir.path(), &HashMap::new()).unwrap();
+        assert_eq!(cfg.get::<String>("url").unwrap(), "http://localhost:8081");
+    }
+
+    #[test]
+    fn unresolvable_placeholder_without_default_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "url: \"${nope.nope}\"\n");
+        let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
+        assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
     }
 }
