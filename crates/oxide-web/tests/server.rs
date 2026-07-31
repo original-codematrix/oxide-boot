@@ -1,6 +1,7 @@
 use oxide_boot::prelude::*;
-use oxide_web::{WebServer, RouteDescriptor, WebError};
+use oxide_web::{controller, ApiError, WebServer, RouteDescriptor, WebError};
 use oxide_boot::__private::ComponentDescriptor;
+use axum::extract::{Json, Path};
 use std::collections::HashMap;
 
 static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -75,5 +76,74 @@ async fn hand_written_route_descriptor_is_mounted_and_resolves_components() {
     let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
     let body = reqwest::get(format!("http://{addr}/echo/hi")).await.unwrap().text().await.unwrap();
     assert_eq!(body, "echo:hi");
+    app.stop().await.unwrap();
+}
+
+// #[controller] macro test (Task 6).
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct Note {
+    id: u32,
+    text: String,
+}
+
+#[component]
+struct NotesController {
+    #[default]
+    store: std::sync::Mutex<Vec<Note>>,
+}
+
+#[controller("/api/notes")]
+impl NotesController {
+    #[post("")]
+    async fn create(&self, body: Json<Note>) -> Result<Json<Note>, ApiError> {
+        let note = body.0.clone();
+        self.store.lock().unwrap_or_else(|p| p.into_inner()).push(body.0);
+        Ok(Json(note))
+    }
+
+    #[get("/{id}")]
+    async fn get_by_id(&self, id: Path<u32>) -> Result<Json<Note>, ApiError> {
+        self.store
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|n| n.id == *id)
+            .cloned()
+            .map(Json)
+            .ok_or_else(ApiError::not_found)
+    }
+}
+
+#[tokio::test]
+async fn controller_macro_mounts_routes_and_returns_problem_json_on_error() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
+    let base = format!("http://{addr}/api/notes");
+    let client = reqwest::Client::new();
+
+    let created: serde_json::Value = client
+        .post(&base)
+        .json(&serde_json::json!({ "id": 1, "text": "hello" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["text"], "hello");
+
+    let fetched: serde_json::Value =
+        client.get(format!("{base}/1")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(fetched["id"], 1);
+
+    let missing = client.get(format!("{base}/999")).send().await.unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(missing.headers()["content-type"], "application/problem+json");
+    let problem: serde_json::Value = missing.json().await.unwrap();
+    assert_eq!(problem["title"], "Not Found");
+    assert_eq!(problem["status"], 404);
+
     app.stop().await.unwrap();
 }

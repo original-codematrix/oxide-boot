@@ -1,0 +1,5 @@
+error: controller method parameters must be plain `name: Type` bindings
+  --> tests/ui/destructured_param.rs:10:28
+   |
+10 |     async fn broken(&self, axum::extract::Path(id): axum::extract::Path<String>) -> String {
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^

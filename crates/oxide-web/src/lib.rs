@@ -6,6 +6,7 @@ pub mod health;
 pub mod routing;
 pub mod server;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
+pub use oxide_web_macros::controller;
 pub use routing::RouteDescriptor;
 pub use server::{ServerProps, WebServer};
 
@@ -15,4 +16,5 @@ pub use server::{ServerProps, WebServer};
 pub mod __private {
     pub use axum;
     pub use inventory;
+    pub use oxide_core::Context;
 }
