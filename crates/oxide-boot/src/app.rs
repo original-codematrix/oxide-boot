@@ -16,6 +16,8 @@ pub enum BootError {
     PostConstruct { component: &'static str, message: String },
     #[error("pre_destroy of component '{component}' failed: {message}")]
     PreDestroy { component: &'static str, message: String },
+    #[error("logging initialization failed: {message}")]
+    Logging { message: String },
 }
 
 pub struct OxideApplication;
@@ -51,7 +53,7 @@ impl AppBuilder {
     pub async fn start(self) -> Result<Application, BootError> {
         let env = self.env.unwrap_or_else(|| std::env::vars().collect());
         let config = AppConfig::load(&self.base_dir, &env)?;
-        init_logging(&config);
+        crate::logging::run_highest_priority(&config)?;
         let name: String = config.get_opt("oxide.application.name")?.unwrap_or_else(|| "oxide-app".into());
         tracing::info!(
             application = %name,
@@ -129,20 +131,13 @@ impl Application {
     }
 }
 
-/// Builds an env-filter string like "info,my_target=debug" from
-/// `oxide.logging.level.root` and `oxide.logging.level.<target>` keys.
-fn init_logging(config: &AppConfig) {
-    let mut directives: Vec<String> =
-        vec![config.get_opt::<String>("oxide.logging.level.root").ok().flatten().unwrap_or_else(|| "info".into())];
-    if let Ok(Some(levels)) = config.get_opt::<HashMap<String, String>>("oxide.logging.level") {
-        for (target, level) in levels {
-            if target != "root" {
-                directives.push(format!("{target}={level}"));
-            }
-        }
-    }
+/// Built-in fallback [`crate::LoggingInitializer`], registered at priority 0
+/// by oxide-boot itself. Sets up a plain `tracing_subscriber::fmt` subscriber
+/// with an `EnvFilter` built from `oxide.logging.level.*` config keys.
+pub(crate) fn fallback_fmt_init(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // try_init: keep the first subscriber if tests boot multiple apps.
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(directives.join(","))
+        .with_env_filter(crate::logging::logging_directives(config))
         .try_init();
+    Ok(())
 }

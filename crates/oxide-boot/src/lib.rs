@@ -1,14 +1,17 @@
 //! Oxide Boot — a Spring-Boot-like application framework for Rust.
 
 mod app;
+mod logging;
 
 pub use app::{AppBuilder, Application, BootError, OxideApplication};
+pub use logging::{logging_directives, LoggingInitializer};
 pub use oxide_macros::{component, main, ConfigProperties};
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::logging::LoggingInitializer;
     pub use inventory;
     pub use oxide_core::*;
     pub use tokio;

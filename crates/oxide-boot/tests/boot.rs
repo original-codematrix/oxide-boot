@@ -215,3 +215,27 @@ async fn config_properties_with_default_tolerate_missing_section() {
     assert!(!consumer.props.flag);
     app.stop().await.unwrap();
 }
+
+static CUSTOM_LOGGING_RAN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+inventory::submit! {
+    oxide_boot::LoggingInitializer {
+        priority: 100,
+        init: |_config| {
+            CUSTOM_LOGGING_RAN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Deliberately no subscriber install: the built-in fallback must NOT run
+            // as well, so log output setup stays with whoever wins.
+            Ok(())
+        },
+    }
+}
+
+#[tokio::test]
+async fn highest_priority_logging_initializer_wins() {
+    let _guard = BOOT_LOCK.lock().await;
+    let before = CUSTOM_LOGGING_RAN.load(std::sync::atomic::Ordering::SeqCst);
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    assert_eq!(CUSTOM_LOGGING_RAN.load(std::sync::atomic::Ordering::SeqCst), before + 1);
+    app.stop().await.unwrap();
+}
