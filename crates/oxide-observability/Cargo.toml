@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 oxide-core.workspace = true
 oxide-boot.workspace = true
+oxide-web.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 tracing.workspace = true
@@ -20,3 +21,4 @@ serde.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true

@@ -6,6 +6,7 @@
 //! `metrics::gauge!` / `metrics::histogram!` calls anywhere in the
 //! application render on demand via [`prometheus_handle`].
 
+mod actuator;
 mod logging;
 mod metrics;
 
