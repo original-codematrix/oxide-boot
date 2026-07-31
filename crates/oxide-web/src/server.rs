@@ -123,11 +123,10 @@ impl WebServer {
 }
 
 inventory::submit! {
-    ComponentDescriptor {
-        type_name: "ServerProps",
-        type_id: || std::any::TypeId::of::<ServerProps>(),
-        deps: || vec![(std::any::TypeId::of::<oxide_core::AppConfig>(), "AppConfig")],
-        construct: |b| {
+    ComponentDescriptor::builder(
+        "ServerProps",
+        || std::any::TypeId::of::<ServerProps>(),
+        |b| {
             let config = b.resolve::<oxide_core::AppConfig>()?;
             let props: ServerProps = config
                 .get_opt("oxide.server")
@@ -139,29 +138,30 @@ inventory::submit! {
             b.insert(props);
             Ok(())
         },
-        post_construct: None,
-        pre_destroy: None,
-    }
+    )
+    .deps(|| vec![(std::any::TypeId::of::<oxide_core::AppConfig>(), "AppConfig")])
+    .build()
 }
 
 inventory::submit! {
-    ComponentDescriptor {
-        type_name: "WebServer",
-        type_id: || std::any::TypeId::of::<WebServer>(),
-        deps: || vec![(std::any::TypeId::of::<ServerProps>(), "ServerProps")],
-        construct: |b| {
+    ComponentDescriptor::builder(
+        "WebServer",
+        || std::any::TypeId::of::<WebServer>(),
+        |b| {
             let props = b.resolve::<ServerProps>()?;
             b.insert(WebServer::new((*props).clone()));
             Ok(())
         },
-        post_construct: Some(|ctx: &Context| {
-            let me = ctx.get::<WebServer>().expect("component was just constructed");
-            let router = crate::routing::build_router(ctx);
-            Box::pin(async move { me.start(router?).await })
-        }),
-        pre_destroy: Some(|ctx: &Context| {
-            let me = ctx.get::<WebServer>().expect("component exists during shutdown");
-            Box::pin(async move { me.stop_server().await })
-        }),
-    }
+    )
+    .deps(|| vec![(std::any::TypeId::of::<ServerProps>(), "ServerProps")])
+    .post_construct(|ctx: &Context| {
+        let me = ctx.get::<WebServer>().expect("component was just constructed");
+        let router = crate::routing::build_router(ctx);
+        Box::pin(async move { me.start(router?).await })
+    })
+    .pre_destroy(|ctx: &Context| {
+        let me = ctx.get::<WebServer>().expect("component exists during shutdown");
+        Box::pin(async move { me.stop_server().await })
+    })
+    .build()
 }

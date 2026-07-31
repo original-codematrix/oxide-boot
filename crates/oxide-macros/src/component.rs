@@ -60,41 +60,40 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     }
 
-    let post_construct = match &args.post_construct {
-        Some(method) => quote! {
-            ::core::option::Option::Some(|__ctx: &::oxide_boot::__private::Context| {
+    let maybe_post_construct = args.post_construct.as_ref().map(|method| {
+        quote! {
+            .post_construct(|__ctx: &::oxide_boot::__private::Context| {
                 let __me = __ctx.get::<#ident>().expect("component was just constructed");
                 ::std::boxed::Box::pin(async move { __me.#method().await })
             })
-        },
-        None => quote! { ::core::option::Option::None },
-    };
-    let pre_destroy = match &args.pre_destroy {
-        Some(method) => quote! {
-            ::core::option::Option::Some(|__ctx: &::oxide_boot::__private::Context| {
+        }
+    });
+    let maybe_pre_destroy = args.pre_destroy.as_ref().map(|method| {
+        quote! {
+            .pre_destroy(|__ctx: &::oxide_boot::__private::Context| {
                 let __me = __ctx.get::<#ident>().expect("component exists during shutdown");
                 ::std::boxed::Box::pin(async move { __me.#method().await })
             })
-        },
-        None => quote! { ::core::option::Option::None },
-    };
+        }
+    });
 
     Ok(quote! {
         #item
 
         ::oxide_boot::__private::inventory::submit! {
-            ::oxide_boot::__private::ComponentDescriptor {
-                type_name: stringify!(#ident),
-                type_id: || ::core::any::TypeId::of::<#ident>(),
-                deps: || <[_]>::into_vec(::std::boxed::Box::new([#(#deps),*])),
-                construct: |__builder| {
+            ::oxide_boot::__private::ComponentDescriptor::builder(
+                stringify!(#ident),
+                || ::core::any::TypeId::of::<#ident>(),
+                |__builder| {
                     let __value = #ident { #(#constructors),* };
                     __builder.insert(__value);
                     ::core::result::Result::Ok(())
                 },
-                post_construct: #post_construct,
-                pre_destroy: #pre_destroy,
-            }
+            )
+            .deps(|| <[_]>::into_vec(::std::boxed::Box::new([#(#deps),*])))
+            #maybe_post_construct
+            #maybe_pre_destroy
+            .build()
         }
     })
 }

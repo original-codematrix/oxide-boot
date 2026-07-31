@@ -42,14 +42,12 @@ async fn boots_serves_health_and_shuts_down() {
 struct EchoService { prefix: String }
 
 inventory::submit! {
-    ComponentDescriptor {
-        type_name: "EchoService",
-        type_id: || std::any::TypeId::of::<EchoService>(),
-        deps: || vec![],
-        construct: |b| { b.insert(EchoService { prefix: "echo:".into() }); Ok(()) },
-        post_construct: None,
-        pre_destroy: None,
-    }
+    ComponentDescriptor::builder(
+        "EchoService",
+        || std::any::TypeId::of::<EchoService>(),
+        |b| { b.insert(EchoService { prefix: "echo:".into() }); Ok(()) },
+    )
+    .build()
 }
 
 inventory::submit! {

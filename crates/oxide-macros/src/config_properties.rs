@@ -28,14 +28,10 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
 
     Ok(quote! {
         ::oxide_boot::__private::inventory::submit! {
-            ::oxide_boot::__private::ComponentDescriptor {
-                type_name: stringify!(#ident),
-                type_id: || ::core::any::TypeId::of::<#ident>(),
-                deps: || <[_]>::into_vec(::std::boxed::Box::new([(
-                    ::core::any::TypeId::of::<::oxide_boot::__private::AppConfig>(),
-                    "AppConfig",
-                )])),
-                construct: |__builder| {
+            ::oxide_boot::__private::ComponentDescriptor::builder(
+                stringify!(#ident),
+                || ::core::any::TypeId::of::<#ident>(),
+                |__builder| {
                     let __config = __builder.resolve::<::oxide_boot::__private::AppConfig>()?;
                     let __props: #ident = __config.get(#prefix).map_err(|e| {
                         ::oxide_boot::__private::ContextError::Construct {
@@ -46,9 +42,12 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                     __builder.insert(__props);
                     ::core::result::Result::Ok(())
                 },
-                post_construct: ::core::option::Option::None,
-                pre_destroy: ::core::option::Option::None,
-            }
+            )
+            .deps(|| <[_]>::into_vec(::std::boxed::Box::new([(
+                ::core::any::TypeId::of::<::oxide_boot::__private::AppConfig>(),
+                "AppConfig",
+            )])))
+            .build()
         }
     })
 }

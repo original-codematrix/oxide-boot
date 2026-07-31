@@ -37,7 +37,13 @@ impl<T> std::ops::Deref for Inject<T> {
 
 /// Static description of one component: how to identify it, what it needs,
 /// how to build it. Registered via `inventory` by the `#[component]` macro.
+///
+/// `#[non_exhaustive]`: fields stay `pub` for reading, but construction
+/// outside `oxide-core` must go through [`ComponentDescriptor::builder`].
+/// This lets future fields be added as additive builder methods instead of
+/// breaking every struct-literal call site.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ComponentDescriptor {
     pub type_name: &'static str,
     pub type_id: fn() -> TypeId,
@@ -48,6 +54,63 @@ pub struct ComponentDescriptor {
 }
 
 inventory::collect!(ComponentDescriptor);
+
+fn no_deps() -> Vec<(TypeId, &'static str)> {
+    Vec::new()
+}
+
+/// Builder for [`ComponentDescriptor`]. Since the descriptor is
+/// `#[non_exhaustive]`, this is the only way to construct one outside of
+/// `oxide-core`.
+pub struct ComponentDescriptorBuilder {
+    inner: ComponentDescriptor,
+}
+
+impl ComponentDescriptor {
+    /// Starts building a descriptor for `type_name`. `deps` defaults to
+    /// none; `post_construct`/`pre_destroy` default to `None`.
+    ///
+    /// `const fn`: macro codegen registers descriptors via
+    /// `inventory::submit!`, which expands into a `static` initializer, so
+    /// the whole builder chain must be const-evaluable.
+    pub const fn builder(
+        type_name: &'static str,
+        type_id: fn() -> TypeId,
+        construct: fn(&mut ContextBuilder) -> Result<(), ContextError>,
+    ) -> ComponentDescriptorBuilder {
+        ComponentDescriptorBuilder {
+            inner: ComponentDescriptor {
+                type_name,
+                type_id,
+                deps: no_deps,
+                construct,
+                post_construct: None,
+                pre_destroy: None,
+            },
+        }
+    }
+}
+
+impl ComponentDescriptorBuilder {
+    pub const fn deps(mut self, deps: fn() -> Vec<(TypeId, &'static str)>) -> Self {
+        self.inner.deps = deps;
+        self
+    }
+
+    pub const fn post_construct(mut self, hook: HookFn) -> Self {
+        self.inner.post_construct = Some(hook);
+        self
+    }
+
+    pub const fn pre_destroy(mut self, hook: HookFn) -> Self {
+        self.inner.pre_destroy = Some(hook);
+        self
+    }
+
+    pub const fn build(self) -> ComponentDescriptor {
+        self.inner
+    }
+}
 
 #[derive(Default)]
 pub struct ContextBuilder {
@@ -112,6 +175,9 @@ pub fn assemble(
         }
     }
 
+    let mut descriptors = descriptors;
+    descriptors.sort_by_key(|d| d.type_name); // deterministic order for independents; dependency order still dominates via the DFS below
+
     #[derive(Clone, Copy, PartialEq)]
     enum Mark {
         Visiting,
@@ -173,31 +239,35 @@ mod tests {
     struct Repo { prefix: String }
     struct Service { repo: Inject<Repo> }
 
-    static REPO: ComponentDescriptor = ComponentDescriptor {
-        type_name: "Repo",
-        type_id: || TypeId::of::<Repo>(),
-        deps: || vec![(TypeId::of::<Config>(), "Config")],
-        construct: |b| {
-            let cfg = b.resolve::<Config>()?;
-            b.insert(Repo { prefix: cfg.greeting.clone() });
-            Ok(())
-        },
-        post_construct: None,
-        pre_destroy: None,
-    };
+    // `ComponentDescriptor` is `#[non_exhaustive]`, so even here (inside
+    // oxide-core, where struct literals would still be legal) tests go
+    // through the builder — it's the one real construction path and the
+    // one this suite should exercise. Builder methods aren't `const fn`,
+    // so descriptors are leaked at runtime rather than declared as
+    // `static`s; this is test-only and has no effect on production code.
+    fn repo_descriptor() -> &'static ComponentDescriptor {
+        Box::leak(Box::new(
+            ComponentDescriptor::builder("Repo", || TypeId::of::<Repo>(), |b| {
+                let cfg = b.resolve::<Config>()?;
+                b.insert(Repo { prefix: cfg.greeting.clone() });
+                Ok(())
+            })
+            .deps(|| vec![(TypeId::of::<Config>(), "Config")])
+            .build(),
+        ))
+    }
 
-    static SERVICE: ComponentDescriptor = ComponentDescriptor {
-        type_name: "Service",
-        type_id: || TypeId::of::<Service>(),
-        deps: || vec![(TypeId::of::<Repo>(), "Repo")],
-        construct: |b| {
-            let repo = b.resolve::<Repo>()?;
-            b.insert(Service { repo });
-            Ok(())
-        },
-        post_construct: None,
-        pre_destroy: None,
-    };
+    fn service_descriptor() -> &'static ComponentDescriptor {
+        Box::leak(Box::new(
+            ComponentDescriptor::builder("Service", || TypeId::of::<Service>(), |b| {
+                let repo = b.resolve::<Repo>()?;
+                b.insert(Service { repo });
+                Ok(())
+            })
+            .deps(|| vec![(TypeId::of::<Repo>(), "Repo")])
+            .build(),
+        ))
+    }
 
     fn seed() -> ContextBuilder {
         let mut b = ContextBuilder::new();
@@ -206,9 +276,43 @@ mod tests {
     }
 
     #[test]
+    fn builder_produces_equivalent_descriptor() {
+        let d = ComponentDescriptor::builder(
+            "Built",
+            || TypeId::of::<Repo>(),
+            |b| {
+                let cfg = b.resolve::<Config>()?;
+                b.insert(Repo { prefix: cfg.greeting.clone() });
+                Ok(())
+            },
+        )
+        .deps(|| vec![(TypeId::of::<Config>(), "Config")])
+        .build();
+        assert_eq!(d.type_name, "Built");
+        assert_eq!((d.deps)().len(), 1);
+        assert!(d.post_construct.is_none() && d.pre_destroy.is_none());
+    }
+
+    #[test]
+    fn independent_components_construct_in_type_name_order() {
+        struct Zebra;
+        struct Alpha;
+        // Registered Zebra first — order must still be alphabetical (deterministic).
+        let zebra: &'static ComponentDescriptor = Box::leak(Box::new(
+            ComponentDescriptor::builder("Zebra", || TypeId::of::<Zebra>(), |b| { b.insert(Zebra); Ok(()) }).build(),
+        ));
+        let alpha: &'static ComponentDescriptor = Box::leak(Box::new(
+            ComponentDescriptor::builder("Alpha", || TypeId::of::<Alpha>(), |b| { b.insert(Alpha); Ok(()) }).build(),
+        ));
+        let (_ctx, order) = assemble(vec![zebra, alpha], ContextBuilder::new()).unwrap();
+        let names: Vec<_> = order.iter().map(|d| d.type_name).collect();
+        assert_eq!(names, vec!["Alpha", "Zebra"]);
+    }
+
+    #[test]
     fn constructs_in_dependency_order_regardless_of_registration_order() {
         // SERVICE registered before its dependency REPO on purpose.
-        let (ctx, order) = assemble(vec![&SERVICE, &REPO], seed()).unwrap();
+        let (ctx, order) = assemble(vec![service_descriptor(), repo_descriptor()], seed()).unwrap();
         assert_eq!(ctx.get::<Service>().unwrap().repo.prefix, "hello");
         let names: Vec<_> = order.iter().map(|d| d.type_name).collect();
         assert_eq!(names, vec!["Repo", "Service"]);
@@ -216,7 +320,7 @@ mod tests {
 
     #[test]
     fn missing_dependency_names_both_components() {
-        let err = assemble(vec![&SERVICE], seed()).unwrap_err();
+        let err = assemble(vec![service_descriptor()], seed()).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("Service") && msg.contains("Repo"), "was: {msg}");
     }
@@ -225,36 +329,30 @@ mod tests {
     fn cycle_is_reported_with_path() {
         struct A(#[allow(dead_code)] u8);
         struct B(#[allow(dead_code)] u8);
-        static CYC_A: ComponentDescriptor = ComponentDescriptor {
-            type_name: "A",
-            type_id: || TypeId::of::<A>(),
-            deps: || vec![(TypeId::of::<B>(), "B")],
-            construct: |_| Ok(()),
-            post_construct: None,
-            pre_destroy: None,
-        };
-        static CYC_B: ComponentDescriptor = ComponentDescriptor {
-            type_name: "B",
-            type_id: || TypeId::of::<B>(),
-            deps: || vec![(TypeId::of::<A>(), "A")],
-            construct: |_| Ok(()),
-            post_construct: None,
-            pre_destroy: None,
-        };
-        let err = assemble(vec![&CYC_A, &CYC_B], ContextBuilder::new()).unwrap_err();
+        let cyc_a: &'static ComponentDescriptor = Box::leak(Box::new(
+            ComponentDescriptor::builder("A", || TypeId::of::<A>(), |_| Ok(()))
+                .deps(|| vec![(TypeId::of::<B>(), "B")])
+                .build(),
+        ));
+        let cyc_b: &'static ComponentDescriptor = Box::leak(Box::new(
+            ComponentDescriptor::builder("B", || TypeId::of::<B>(), |_| Ok(()))
+                .deps(|| vec![(TypeId::of::<A>(), "A")])
+                .build(),
+        ));
+        let err = assemble(vec![cyc_a, cyc_b], ContextBuilder::new()).unwrap_err();
         assert!(matches!(err, ContextError::Cycle { .. }));
         assert!(err.to_string().contains("A -> B -> A"), "was: {err}");
     }
 
     #[test]
     fn duplicate_registration_is_an_error() {
-        let err = assemble(vec![&REPO, &REPO], seed()).unwrap_err();
+        let err = assemble(vec![repo_descriptor(), repo_descriptor()], seed()).unwrap_err();
         assert!(matches!(err, ContextError::Duplicate { .. }));
     }
 
     #[test]
     fn inject_derefs_and_clones_share_the_same_instance() {
-        let (ctx, _) = assemble(vec![&REPO], seed()).unwrap();
+        let (ctx, _) = assemble(vec![repo_descriptor()], seed()).unwrap();
         let a = ctx.get::<Repo>().unwrap();
         let b = a.clone();
         assert!(std::ptr::eq(&*a, &*b));

@@ -37,24 +37,25 @@ fn test_config_dir() -> tempfile::TempDir {
 struct Probe;
 
 inventory::submit! {
-    ComponentDescriptor {
-        type_name: "Probe",
-        type_id: || std::any::TypeId::of::<Probe>(),
-        deps: || vec![(std::any::TypeId::of::<AppConfig>(), "AppConfig")],
-        construct: |b| {
+    ComponentDescriptor::builder(
+        "Probe",
+        || std::any::TypeId::of::<Probe>(),
+        |b| {
             b.resolve::<AppConfig>()?;
             b.insert(Probe);
             Ok(())
         },
-        post_construct: Some(|_ctx: &Context| Box::pin(async {
-            STARTED_COUNT.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        })),
-        pre_destroy: Some(|_ctx: &Context| Box::pin(async {
-            STOPPED_COUNT.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        })),
-    }
+    )
+    .deps(|| vec![(std::any::TypeId::of::<AppConfig>(), "AppConfig")])
+    .post_construct(|_ctx: &Context| Box::pin(async {
+        STARTED_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }))
+    .pre_destroy(|_ctx: &Context| Box::pin(async {
+        STOPPED_COUNT.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }))
+    .build()
 }
 
 #[tokio::test]
