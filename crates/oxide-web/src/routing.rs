@@ -15,11 +15,30 @@ pub struct RouteDescriptor {
 
 inventory::collect!(RouteDescriptor);
 
+/// Rejects duplicate `(method, path)` registrations and any route that
+/// collides with the `/actuator` prefix reserved for the framework's own
+/// health endpoints. `routes` must already be sorted by `(path, method)`.
+fn validate_routes(routes: &[&RouteDescriptor]) -> Result<(), WebError> {
+    for pair in routes.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if a.path == b.path && a.method == b.method {
+            return Err(WebError::DuplicateRoute { method: a.method, path: a.path });
+        }
+    }
+    for route in routes {
+        if route.path == "/actuator" || route.path.starts_with("/actuator/") {
+            return Err(WebError::ReservedPath { path: route.path });
+        }
+    }
+    Ok(())
+}
+
 /// Assembles the HTTP router by collecting all registered RouteDescriptors,
 /// sorting them deterministically, and merging the health endpoints.
 pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
     let mut routes: Vec<&RouteDescriptor> = inventory::iter::<RouteDescriptor>().collect();
     routes.sort_by_key(|r| (r.path, r.method));
+    validate_routes(&routes)?;
     let mut router = Router::new();
     for route in routes {
         router = (route.register)(ctx, router)?;
@@ -29,4 +48,71 @@ pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
         router = router.merge(health::health_routes(server.readiness()));
     }
     Ok(router)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_register(_ctx: &Context, router: Router) -> Result<Router, WebError> {
+        Ok(router)
+    }
+
+    fn descriptor(method: &'static str, path: &'static str) -> RouteDescriptor {
+        RouteDescriptor { method, path, register: dummy_register }
+    }
+
+    #[test]
+    fn accepts_distinct_sorted_routes() {
+        let a = descriptor("GET", "/api/notes");
+        let b = descriptor("POST", "/api/notes");
+        let routes = vec![&a, &b];
+        assert!(validate_routes(&routes).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_method_and_path() {
+        let a = descriptor("GET", "/api/notes");
+        let b = descriptor("GET", "/api/notes");
+        let routes = vec![&a, &b];
+        let err = validate_routes(&routes).unwrap_err();
+        match err {
+            WebError::DuplicateRoute { method, path } => {
+                assert_eq!(method, "GET");
+                assert_eq!(path, "/api/notes");
+            }
+            other => panic!("expected DuplicateRoute, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn allows_same_path_different_method() {
+        let a = descriptor("GET", "/api/notes");
+        let b = descriptor("DELETE", "/api/notes");
+        let routes = vec![&a, &b];
+        assert!(validate_routes(&routes).is_ok());
+    }
+
+    #[test]
+    fn rejects_exact_actuator_path() {
+        let a = descriptor("GET", "/actuator");
+        let routes = vec![&a];
+        let err = validate_routes(&routes).unwrap_err();
+        assert!(matches!(err, WebError::ReservedPath { path: "/actuator" }));
+    }
+
+    #[test]
+    fn rejects_actuator_prefixed_path() {
+        let a = descriptor("GET", "/actuator/custom");
+        let routes = vec![&a];
+        let err = validate_routes(&routes).unwrap_err();
+        assert!(matches!(err, WebError::ReservedPath { path: "/actuator/custom" }));
+    }
+
+    #[test]
+    fn allows_path_that_merely_contains_actuator_as_a_substring() {
+        let a = descriptor("GET", "/api/actuatorish");
+        let routes = vec![&a];
+        assert!(validate_routes(&routes).is_ok());
+    }
 }

@@ -35,6 +35,7 @@ async fn boots_serves_health_and_shuts_down() {
 
     app.stop().await.unwrap();
     assert!(reqwest::get(format!("{base}/actuator/health")).await.is_err(), "server must be down after stop");
+    assert!(server.local_addr().is_none(), "local_addr must be None after pre_destroy tears down the server");
 }
 
 // Hand-written route descriptor test (macro-generated version comes in Task 6)

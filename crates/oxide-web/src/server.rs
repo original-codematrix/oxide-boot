@@ -33,7 +33,6 @@ impl Default for ServerProps {
 struct ServerRuntime {
     shutdown: Option<oneshot::Sender<()>>,
     handle: Option<tokio::task::JoinHandle<Result<(), std::io::Error>>>,
-    local_addr: Option<SocketAddr>,
 }
 
 /// HTTP server lifecycle component. Binds on `post_construct`, drains and
@@ -51,7 +50,7 @@ impl WebServer {
         Self {
             props,
             readiness: Arc::new(AtomicBool::new(false)),
-            runtime: Mutex::new(ServerRuntime { shutdown: None, handle: None, local_addr: None }),
+            runtime: Mutex::new(ServerRuntime { shutdown: None, handle: None }),
             addr: std::sync::Mutex::new(None),
         }
     }
@@ -86,7 +85,6 @@ impl WebServer {
             let mut rt = self.runtime.lock().await;
             rt.shutdown = Some(tx);
             rt.handle = Some(handle);
-            rt.local_addr = Some(local_addr);
         }
         *self.addr.lock().unwrap_or_else(|p| p.into_inner()) = Some(local_addr);
         self.readiness.store(true, Ordering::SeqCst);
@@ -96,6 +94,7 @@ impl WebServer {
 
     async fn stop_server(&self) -> ComponentResult<()> {
         self.readiness.store(false, Ordering::SeqCst);
+        *self.addr.lock().unwrap_or_else(|p| p.into_inner()) = None;
         let (shutdown, handle) = {
             let mut rt = self.runtime.lock().await;
             (rt.shutdown.take(), rt.handle.take())
@@ -103,9 +102,9 @@ impl WebServer {
         if let Some(tx) = shutdown {
             let _ = tx.send(());
         }
-        if let Some(handle) = handle {
+        if let Some(mut handle) = handle {
             let grace = std::time::Duration::from_secs(self.props.shutdown_grace_seconds);
-            match tokio::time::timeout(grace, handle).await {
+            match tokio::time::timeout(grace, &mut handle).await {
                 Ok(join) => {
                     join.map_err(|e| format!("server task panicked: {e}"))??;
                     tracing::info!("HTTP server stopped");
@@ -115,6 +114,7 @@ impl WebServer {
                         grace_seconds = self.props.shutdown_grace_seconds,
                         "HTTP server drain timed out"
                     );
+                    handle.abort();
                 }
             }
         }

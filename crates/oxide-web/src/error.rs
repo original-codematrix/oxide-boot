@@ -103,6 +103,10 @@ pub enum WebError {
     Bind { port: u16, #[source] source: std::io::Error },
     #[error("controller '{type_name}' (route '{path}') is not registered as a component — add #[component] to the struct")]
     ControllerNotRegistered { type_name: &'static str, path: &'static str },
+    #[error("duplicate route registered: {method} {path}")]
+    DuplicateRoute { method: &'static str, path: &'static str },
+    #[error("route '{path}' is reserved: '/actuator' is reserved for the framework's own endpoints")]
+    ReservedPath { path: &'static str },
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! error responses, and an HTTP server wired into the boot lifecycle.
 
 pub mod error;
-pub mod health;
+mod health;
 pub mod routing;
 pub mod server;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
