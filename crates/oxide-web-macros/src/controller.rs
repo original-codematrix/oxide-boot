@@ -49,6 +49,20 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         let Some((attr_idx, verb, sub_path)) = route else { continue };
         method.attrs.remove(attr_idx);
 
+        // Route methods must take `&self` so `skip(1)` below is safe: without
+        // this check a method missing `&self` (or taking `self`/`&mut self`)
+        // would silently drop its first real parameter instead of erroring.
+        let is_shared_self_receiver = method
+            .sig
+            .receiver()
+            .is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
+        if !is_shared_self_receiver {
+            return Err(syn::Error::new_spanned(
+                &method.sig,
+                "controller route methods must take &self as their first parameter",
+            ));
+        }
+
         // Collect plain `ident: Type` params (skip &self).
         let mut params = Vec::new();
         for arg in method.sig.inputs.iter().skip(1) {
