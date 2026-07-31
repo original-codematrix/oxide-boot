@@ -105,6 +105,10 @@ fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
 /// greedily tries to match the longest run of segments against an existing
 /// key (normalized), so `KAFKA_BOOTSTRAP_SERVERS` binds to `bootstrap-servers`.
 /// Unknown paths are created with one mapping level per segment.
+///
+/// **Precedence:** If an override path must descend through an existing non-mapping
+/// (scalar or sequence), that value is replaced by a mapping to allow the env var
+/// to set nested keys. This implements the Spring principle: env overrides always win.
 fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
     if segments.is_empty() {
         return;
@@ -249,5 +253,22 @@ mod tests {
         let cfg = AppConfig::load(dir.path(), &env).unwrap();
         assert!(cfg.get_opt::<String>("path").unwrap().is_none());
         assert!(cfg.get_opt::<String>("oxide.profiles.active").unwrap().is_none());
+    }
+
+    #[test]
+    fn env_var_replaces_scalar_when_descending_through_it_env_wins_by_design() {
+        let dir = tempfile::tempdir().unwrap();
+        // Start with a scalar value at oxide.server
+        write(dir.path(), "application.yml", "oxide:\n  server: \"legacy-connection-string\"\n");
+        // Env var sets a nested key under oxide.server
+        let env = HashMap::from([("OXIDE_SERVER_PORT".into(), "9090".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+
+        // Env override applies: the new nested key is created
+        assert_eq!(cfg.get::<u16>("oxide.server.port").unwrap(), 9090);
+
+        // Original scalar is replaced by a mapping; oxide.server is now a mapping {port: 9090},
+        // not the scalar "legacy-connection-string". Attempting to deserialize as string fails.
+        assert!(matches!(cfg.get::<String>("oxide.server"), Err(ConfigError::Deserialize { .. })));
     }
 }
