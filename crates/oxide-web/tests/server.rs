@@ -114,6 +114,35 @@ impl NotesController {
     }
 }
 
+// Graceful-shutdown drain test (Task 7).
+#[component]
+struct SlowController {}
+
+#[controller("/slow")]
+impl SlowController {
+    #[get("")]
+    async fn slow(&self) -> &'static str {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        "done"
+    }
+}
+
+#[tokio::test]
+async fn graceful_shutdown_drains_in_flight_requests() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
+
+    let in_flight = tokio::spawn(reqwest::get(format!("http://{addr}/slow")));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // request is on the wire
+    app.stop().await.unwrap(); // must wait for the drain
+
+    let response = in_flight.await.unwrap().unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "done");
+}
+
 #[tokio::test]
 async fn controller_macro_mounts_routes_and_returns_problem_json_on_error() {
     let _guard = BOOT_LOCK.lock().await;

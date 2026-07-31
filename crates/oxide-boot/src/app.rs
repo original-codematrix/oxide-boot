@@ -83,6 +83,7 @@ impl AppBuilder {
     }
 }
 
+#[derive(Debug)]
 pub struct Application {
     context: Arc<Context>,
     order: Vec<&'static ComponentDescriptor>,
