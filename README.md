@@ -44,10 +44,14 @@ Run the example: `cd examples/hello-world && cargo run`
 
 ## Environment overrides
 
-Env-var overrides can only reach keys under the `oxide:` namespace in this
-version — the `OXIDE_` prefix doubles as that top-level key and is not
-stripped, so `OXIDE_SERVER_PORT` maps to `oxide.server.port`. Application-level
-config outside `oxide:` (e.g. `greeter:`) is file-only for now.
+An env var `OXIDE_A_B` binds in this order: (1) an existing key under
+`oxide.a.b` — the framework namespace wins if present; (2) an existing key
+under `a.b`, with the `OXIDE_` prefix stripped — this makes app-level config
+outside `oxide:` (e.g. `greeter:`) env-overridable, so `OXIDE_GREETER_NAME`
+maps to `greeter.name` when `greeter:` exists in the YAML; (3) otherwise a new
+key is created under `oxide.a.b`. "Existing" means intermediate levels must
+already be present as keys — only the final leaf may be newly created, and
+only once at least one existing level was matched.
 
 ## Spring-to-Oxide cheat sheet
 

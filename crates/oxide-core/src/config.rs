@@ -97,6 +97,15 @@ fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
         let segments: Vec<String> = name.split('_').map(|s| s.to_ascii_lowercase()).collect();
         // Parse the value as a YAML scalar so "9090" becomes a number, "true" a bool.
         let value: Value = serde_yaml_ng::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()));
+        // 1. Framework namespace against existing keys (`oxide` is the first segment).
+        if set_existing(root, &segments, value.clone(), 0) {
+            continue;
+        }
+        // 2. Stripped prefix against existing keys — makes app-level config env-overridable.
+        if segments.len() > 1 && set_existing(root, &segments[1..], value.clone(), 0) {
+            continue;
+        }
+        // 3. Nothing matches: create under the framework namespace (pre-2a behavior).
         set_relaxed(root, &segments, value);
     }
 }
@@ -143,6 +152,52 @@ fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
         }
         set_relaxed(map.get_mut(&head).expect("just inserted"), &segments[1..], value);
     }
+}
+
+/// Like `set_relaxed`, but binds only along EXISTING keys (greedy longest match
+/// per level). Intermediate levels must already exist; only the final leaf may
+/// be newly inserted, and only once at least one existing level was descended
+/// (`depth > 0`). Descending through an existing scalar key replaces it with a
+/// mapping — env overrides win by design (pinned in Phase 1); the remaining
+/// segments are then created below it via `set_relaxed`. Returns whether the
+/// value was bound.
+fn set_existing(node: &mut Value, segments: &[String], value: Value, depth: usize) -> bool {
+    if segments.is_empty() {
+        return false;
+    }
+    let Value::Mapping(map) = node else {
+        // Reached via an existing key that holds a scalar: env wins, convert.
+        if depth == 0 {
+            return false;
+        }
+        *node = Value::Mapping(Default::default());
+        set_relaxed(node, segments, value);
+        return true;
+    };
+
+    for take in (1..=segments.len()).rev() {
+        let candidate = normalize(&segments[..take].join(""));
+        let existing = map
+            .keys()
+            .find(|k| matches!(k, Value::String(s) if normalize(s) == candidate))
+            .cloned();
+        if let Some(key) = existing {
+            if take == segments.len() {
+                map.insert(key, value);
+                return true;
+            }
+            let child = map.get_mut(&key).expect("key just found");
+            return set_existing(child, &segments[take..], value, depth + 1);
+        }
+    }
+
+    // No existing key matched at this level: the leaf may be created here,
+    // but only if we already descended through at least one existing level.
+    if segments.len() == 1 && depth > 0 {
+        map.insert(Value::String(segments[0].clone()), value);
+        return true;
+    }
+    false
 }
 
 /// Recursively merge `overlay` into `base`: mappings merge key-wise,
@@ -404,6 +459,37 @@ mod tests {
         write(dir.path(), "application.yml", "url: \"${nope.nope}\"\n");
         let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
         assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
+    }
+
+    #[test]
+    fn env_var_reaches_app_config_outside_oxide_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "greeter:\n  name: World\n");
+        let env = HashMap::from([("OXIDE_GREETER_NAME".into(), "Rust".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert_eq!(cfg.get::<String>("greeter.name").unwrap(), "Rust");
+        // Nothing was created in the framework namespace:
+        assert!(cfg.get_opt::<String>("oxide.greeter.name").unwrap().is_none());
+    }
+
+    #[test]
+    fn framework_namespace_wins_over_stripped_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml",
+            "oxide:\n  greeter:\n    name: framework\ngreeter:\n  name: app\n");
+        let env = HashMap::from([("OXIDE_GREETER_NAME".into(), "X".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert_eq!(cfg.get::<String>("oxide.greeter.name").unwrap(), "X");
+        assert_eq!(cfg.get::<String>("greeter.name").unwrap(), "app"); // untouched
+    }
+
+    #[test]
+    fn stripped_binding_may_create_leaf_in_existing_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "greeter:\n  name: World\n");
+        let env = HashMap::from([("OXIDE_GREETER_EXCITED".into(), "true".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+        assert!(cfg.get::<bool>("greeter.excited").unwrap());
     }
 
     #[test]
