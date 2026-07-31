@@ -113,6 +113,13 @@ oxide:
 
 - Ladereihenfolge: `application.yml` → `application-{profile}.yml` → Umgebungsvariablen
   (`OXIDE_SERVER_PORT=9090` überschreibt `oxide.server.port`). Profil via `OXIDE_PROFILES_ACTIVE`.
+- Env-Binding-Regel (Entscheidung 2026-07-31, „Fallback-Stripping"): eine Variable `OXIDE_A_B`
+  bindet in dieser Reihenfolge — (1) existierende Keys unter `oxide.a.b` (Framework-Namespace
+  gewinnt), (2) existierende Keys unter `a.b` (Prefix gestrippt — damit ist App-Config wie
+  `greeter.name` env-overridebar), (3) sonst wird `oxide.a.b` neu angelegt. „Existierend" heißt:
+  Zwischenebenen müssen als Keys vorhanden sein, nur das Blatt darf neu entstehen; beim Abstieg
+  durch einen existierenden Skalar-Key gewinnt der Env-Wert (Skalar wird zur Mapping-Ebene,
+  festgenagelt seit Phase 1).
 - `#[derive(ConfigProperties)]` + `#[config(prefix = "oxide.clients.billing")]` = typisierte
   Config-Structs mit Defaults und Validierung beim Start (`@ConfigurationProperties`-Äquivalent).
 - Platzhalter `${…}` in Config-Werten und Macro-Attributen (z. B. `base_url = "${oxide.clients.billing.url}"`).
