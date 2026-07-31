@@ -256,7 +256,7 @@ fn substitute_strings(node: &mut Value, snapshot: &Value, changed: &mut bool) ->
 
 fn lookup_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(root, |node, segment| match node {
-        Value::Mapping(map) => map.get(&Value::String(segment.to_string())),
+        Value::Mapping(map) => map.get(Value::String(segment.to_string())),
         _ => None,
     })
 }
@@ -347,7 +347,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let env = HashMap::from([("OXIDE_FEATURE_ENABLED".into(), "true".into())]);
         let cfg = AppConfig::load(dir.path(), &env).unwrap();
-        assert_eq!(cfg.get::<bool>("oxide.feature.enabled").unwrap(), true);
+        assert!(cfg.get::<bool>("oxide.feature.enabled").unwrap());
     }
 
     #[test]

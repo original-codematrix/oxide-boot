@@ -1,0 +1,10 @@
+oxide:
+  application:
+    name: hello-world
+  logging:
+    level:
+      root: info
+
+greeter:
+  name: World
+  excited: true

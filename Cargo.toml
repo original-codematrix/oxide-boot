@@ -4,6 +4,7 @@ members = [
     "crates/oxide-core",
     "crates/oxide-macros",
     "crates/oxide-boot",
+    "examples/hello-world",
 ]
 
 [workspace.package]

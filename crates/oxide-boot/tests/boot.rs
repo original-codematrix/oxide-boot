@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // tests race for BOOT_LOCK).
 static STARTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static STOPPED_COUNT: AtomicUsize = AtomicUsize::new(0);
-static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Shared config fixture: every component registered anywhere in this file is
 /// constructed on every boot in this binary (see the `inventory` note above),
@@ -59,7 +59,7 @@ inventory::submit! {
 
 #[tokio::test]
 async fn boots_reads_config_runs_hooks_and_stops() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
     let started_before = STARTED_COUNT.load(Ordering::SeqCst);
     let stopped_before = STOPPED_COUNT.load(Ordering::SeqCst);
 
@@ -109,7 +109,7 @@ impl Greeter {
 
 #[tokio::test]
 async fn component_macro_wires_dependencies_and_runs_post_construct() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
     // Even serialized against the other test, this app's own boot also
     // constructs Greeter, which is process-global via `inventory`. Snapshot
     // the counter before this boot and assert on the delta rather than an
@@ -149,7 +149,7 @@ impl Connection {
 
 #[tokio::test]
 async fn component_macro_wires_combined_post_construct_and_pre_destroy() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
     // Same rationale as the other tests: `Connection` is process-global via
     // `inventory`, so every boot in this binary constructs it. Snapshot both
     // counters and assert on the delta caused by this test's own boot/stop.
@@ -182,7 +182,7 @@ struct BillingGateway {
 
 #[tokio::test]
 async fn config_properties_are_bound_and_injectable() {
-    let _guard = BOOT_LOCK.lock().unwrap();
+    let _guard = BOOT_LOCK.lock().await;
 
     let dir = test_config_dir();
     let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();

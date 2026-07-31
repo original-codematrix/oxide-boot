@@ -1,0 +1,13 @@
+[package]
+name = "hello-world"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+oxide-boot.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
