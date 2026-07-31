@@ -155,11 +155,9 @@ inventory::submit! {
             Ok(())
         },
         post_construct: Some(|ctx: &Context| {
-            // Task 5 will replace this with `crate::routing::build_router(ctx)`;
-            // for now the router is just the health endpoints.
             let me = ctx.get::<WebServer>().expect("component was just constructed");
-            let router = crate::health::health_routes(me.readiness());
-            Box::pin(async move { me.start(router).await })
+            let router = crate::routing::build_router(ctx);
+            Box::pin(async move { me.start(router?).await })
         }),
         pre_destroy: Some(|ctx: &Context| {
             let me = ctx.get::<WebServer>().expect("component exists during shutdown");

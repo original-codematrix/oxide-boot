@@ -3,8 +3,10 @@
 
 pub mod error;
 pub mod health;
+pub mod routing;
 pub mod server;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
+pub use routing::RouteDescriptor;
 pub use server::{ServerProps, WebServer};
 
 /// Internal re-exports used by generated macro code. Not part of the
