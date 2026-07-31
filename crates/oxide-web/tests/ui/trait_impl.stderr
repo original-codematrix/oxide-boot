@@ -1,0 +1,5 @@
+error: #[controller] must be applied to an inherent impl, not a trait impl
+ --> tests/ui/trait_impl.rs:6:6
+  |
+6 | impl Clone for C {
+  |      ^^^^^

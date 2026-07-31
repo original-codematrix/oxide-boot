@@ -24,6 +24,17 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let base_path = if args.is_empty() { String::new() } else { syn::parse2::<LitStr>(args)?.value() };
     let mut item: ItemImpl = syn::parse2(item)
         .map_err(|e| syn::Error::new(e.span(), "#[controller] must be applied to an impl block"))?;
+
+    // Guard: reject generic impl blocks
+    if !item.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(&item.generics, "#[controller] does not support generic impl blocks"));
+    }
+
+    // Guard: reject trait impl blocks
+    if let Some((_, trait_path, _)) = &item.trait_ {
+        return Err(syn::Error::new_spanned(trait_path, "#[controller] must be applied to an inherent impl, not a trait impl"));
+    }
+
     let self_ty = item.self_ty.clone();
     let mut registrations = Vec::new();
 
