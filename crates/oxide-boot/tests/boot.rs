@@ -1,6 +1,7 @@
 use oxide_boot::component;
 use oxide_boot::prelude::*;
 use oxide_boot::__private::{ComponentDescriptor, Context};
+use oxide_boot::ConfigProperties;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -17,6 +18,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static STARTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static STOPPED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Shared config fixture: every component registered anywhere in this file is
+/// constructed on every boot in this binary (see the `inventory` note above),
+/// so this must contain the union of all config keys needed by ALL registered
+/// test components — currently `oxide.application.name` (Probe) and `billing`
+/// (BillingProps).
+fn test_config_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("application.yml"),
+        "oxide:\n  application:\n    name: probe-app\nbilling:\n  url: \"http://localhost:8081\"\n",
+    )
+    .unwrap();
+    dir
+}
 
 struct Probe;
 
@@ -47,8 +63,7 @@ async fn boots_reads_config_runs_hooks_and_stops() {
     let started_before = STARTED_COUNT.load(Ordering::SeqCst);
     let stopped_before = STOPPED_COUNT.load(Ordering::SeqCst);
 
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("application.yml"), "oxide:\n  application:\n    name: probe-app\n").unwrap();
+    let dir = test_config_dir();
 
     let app = OxideApplication::builder()
         .base_dir(dir.path())
@@ -102,8 +117,7 @@ async fn component_macro_wires_dependencies_and_runs_post_construct() {
     // or after `boots_reads_config_runs_hooks_and_stops`.
     let before = GREETER_INIT_COUNT.load(Ordering::SeqCst);
 
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("application.yml"), "oxide: {}\n").unwrap();
+    let dir = test_config_dir();
     let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
 
     let greeter = app.context().get::<Greeter>().unwrap();
@@ -142,8 +156,7 @@ async fn component_macro_wires_combined_post_construct_and_pre_destroy() {
     let open_before = OPEN_COUNT.load(Ordering::SeqCst);
     let close_before = CLOSE_COUNT.load(Ordering::SeqCst);
 
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("application.yml"), "oxide: {}\n").unwrap();
+    let dir = test_config_dir();
     let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
 
     assert!(app.context().get::<Connection>().is_some());
@@ -152,4 +165,30 @@ async fn component_macro_wires_combined_post_construct_and_pre_destroy() {
 
     app.stop().await.unwrap();
     assert_eq!(CLOSE_COUNT.load(Ordering::SeqCst) - close_before, 1);
+}
+
+#[derive(ConfigProperties, serde::Deserialize)]
+#[config(prefix = "billing")]
+struct BillingProps {
+    url: String,
+    #[serde(default)]
+    retries: u32,
+}
+
+#[component]
+struct BillingGateway {
+    props: BillingProps,
+}
+
+#[tokio::test]
+async fn config_properties_are_bound_and_injectable() {
+    let _guard = BOOT_LOCK.lock().unwrap();
+
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+
+    let gw = app.context().get::<BillingGateway>().unwrap();
+    assert_eq!(gw.props.url, "http://localhost:8081");
+    assert_eq!(gw.props.retries, 0);
+    app.stop().await.unwrap();
 }
