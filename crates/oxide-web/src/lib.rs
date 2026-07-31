@@ -2,7 +2,10 @@
 //! error responses, and an HTTP server wired into the boot lifecycle.
 
 pub mod error;
+pub mod health;
+pub mod server;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
+pub use server::{ServerProps, WebServer};
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.
