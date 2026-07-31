@@ -16,13 +16,19 @@ fn default_grace() -> u64 {
 
 /// Configuration bound to the `oxide.server` prefix. The section may be
 /// absent entirely (falls back to `Default`).
-#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties, Default)]
+#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.server", default)]
 pub struct ServerProps {
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(rename = "shutdown-grace-seconds", default = "default_grace")]
     pub shutdown_grace_seconds: u64,
+}
+
+impl Default for ServerProps {
+    fn default() -> Self {
+        Self { port: default_port(), shutdown_grace_seconds: default_grace() }
+    }
 }
 
 struct ServerRuntime {
@@ -138,4 +144,24 @@ inventory::submit! {
         Box::pin(async move { me.stop_server().await })
     })
     .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_props_default_has_correct_values() {
+        let props = ServerProps::default();
+        assert_eq!(props.port, 8080);
+        assert_eq!(props.shutdown_grace_seconds, 30);
+    }
+
+    #[test]
+    fn server_props_deserialize_empty_uses_defaults() {
+        let props: ServerProps =
+            serde_json::from_str("{}").expect("empty object should deserialize with defaults");
+        assert_eq!(props.port, 8080);
+        assert_eq!(props.shutdown_grace_seconds, 30);
+    }
 }
