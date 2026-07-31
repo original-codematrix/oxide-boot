@@ -40,7 +40,14 @@ greeter:
   name: World
 ```
 
-Run the example: `cargo run -p hello-world`
+Run the example: `cd examples/hello-world && cargo run`
+
+## Environment overrides
+
+Env-var overrides can only reach keys under the `oxide:` namespace in this
+version — the `OXIDE_` prefix doubles as that top-level key and is not
+stripped, so `OXIDE_SERVER_PORT` maps to `oxide.server.port`. Application-level
+config outside `oxide:` (e.g. `greeter:`) is file-only for now.
 
 ## Spring-to-Oxide cheat sheet
 

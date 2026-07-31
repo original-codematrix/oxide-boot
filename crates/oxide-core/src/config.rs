@@ -88,10 +88,12 @@ fn normalize(key: &str) -> String {
 }
 
 fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
-    for (name, raw) in env {
-        if !name.starts_with("OXIDE_") || name == "OXIDE_PROFILES_ACTIVE" {
-            continue;
-        }
+    let mut matching: Vec<(&String, &String)> = env
+        .iter()
+        .filter(|(name, _)| name.starts_with("OXIDE_") && name.as_str() != "OXIDE_PROFILES_ACTIVE")
+        .collect();
+    matching.sort_by_key(|(name, _)| name.as_str());
+    for (name, raw) in matching {
         let segments: Vec<String> = name.split('_').map(|s| s.to_ascii_lowercase()).collect();
         // Parse the value as a YAML scalar so "9090" becomes a number, "true" a bool.
         let value: Value = serde_yaml_ng::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()));
