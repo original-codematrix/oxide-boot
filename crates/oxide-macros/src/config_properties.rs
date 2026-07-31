@@ -30,7 +30,7 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         ::oxide_boot::__private::inventory::submit! {
             ::oxide_boot::__private::ComponentDescriptor::builder(
                 stringify!(#ident),
-                || ::core::any::TypeId::of::<#ident>(),
+                ::core::any::TypeId::of::<#ident>,
                 |__builder| {
                     let __config = __builder.resolve::<::oxide_boot::__private::AppConfig>()?;
                     let __props: #ident = __config.get(#prefix).map_err(|e| {

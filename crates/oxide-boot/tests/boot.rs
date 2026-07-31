@@ -39,7 +39,7 @@ struct Probe;
 inventory::submit! {
     ComponentDescriptor::builder(
         "Probe",
-        || std::any::TypeId::of::<Probe>(),
+        std::any::TypeId::of::<Probe>,
         |b| {
             b.resolve::<AppConfig>()?;
             b.insert(Probe);

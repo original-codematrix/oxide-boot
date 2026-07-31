@@ -125,7 +125,7 @@ impl WebServer {
 inventory::submit! {
     ComponentDescriptor::builder(
         "ServerProps",
-        || std::any::TypeId::of::<ServerProps>(),
+        std::any::TypeId::of::<ServerProps>,
         |b| {
             let config = b.resolve::<oxide_core::AppConfig>()?;
             let props: ServerProps = config
@@ -146,7 +146,7 @@ inventory::submit! {
 inventory::submit! {
     ComponentDescriptor::builder(
         "WebServer",
-        || std::any::TypeId::of::<WebServer>(),
+        std::any::TypeId::of::<WebServer>,
         |b| {
             let props = b.resolve::<ServerProps>()?;
             b.insert(WebServer::new((*props).clone()));

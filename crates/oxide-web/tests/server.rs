@@ -44,7 +44,7 @@ struct EchoService { prefix: String }
 inventory::submit! {
     ComponentDescriptor::builder(
         "EchoService",
-        || std::any::TypeId::of::<EchoService>(),
+        std::any::TypeId::of::<EchoService>,
         |b| { b.insert(EchoService { prefix: "echo:".into() }); Ok(()) },
     )
     .build()

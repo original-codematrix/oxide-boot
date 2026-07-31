@@ -83,7 +83,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         ::oxide_boot::__private::inventory::submit! {
             ::oxide_boot::__private::ComponentDescriptor::builder(
                 stringify!(#ident),
-                || ::core::any::TypeId::of::<#ident>(),
+                ::core::any::TypeId::of::<#ident>,
                 |__builder| {
                     let __value = #ident { #(#constructors),* };
                     __builder.insert(__value);
