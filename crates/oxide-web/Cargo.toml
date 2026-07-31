@@ -1,0 +1,25 @@
+[package]
+name = "oxide-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+oxide-core.workspace = true
+oxide-boot.workspace = true
+oxide-web-macros.workspace = true
+axum.workspace = true
+tower.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+inventory.workspace = true
+thiserror.workspace = true
+futures.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
+trybuild.workspace = true

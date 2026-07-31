@@ -4,6 +4,8 @@ members = [
     "crates/oxide-core",
     "crates/oxide-macros",
     "crates/oxide-boot",
+    "crates/oxide-web",
+    "crates/oxide-web-macros",
     "examples/hello-world",
 ]
 
@@ -17,6 +19,12 @@ license = "MIT OR Apache-2.0"
 oxide-core = { path = "crates/oxide-core" }
 oxide-macros = { path = "crates/oxide-macros" }
 oxide-boot = { path = "crates/oxide-boot" }
+oxide-web = { path = "crates/oxide-web" }
+oxide-web-macros = { path = "crates/oxide-web-macros" }
+axum = "0.8"
+tower = "0.5"
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml_ng = "0.10"
