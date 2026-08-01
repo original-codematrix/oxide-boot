@@ -208,8 +208,20 @@ pub mod testing {
     /// already-installed provider instead of building one from
     /// `oxide.otel.endpoint`.
     pub fn install_in_memory() -> InMemorySpanExporter {
+        install_in_memory_with_ratio(1.0)
+    }
+
+    /// Same as [`install_in_memory`], but with an injectable `sample_ratio`
+    /// — needed to distinguish `ParentBased(TraceIdRatioBased(ratio))` from
+    /// a bare always-on sampler: a hardcoded ratio of 1.0 can't tell the two
+    /// apart, since both would export every span regardless of the parent's
+    /// sampled flag. `tests/otel_parent_sampling.rs` uses `ratio: 0.0` with
+    /// a *sampled* parent header to prove the `ParentBased` wrapping is
+    /// actually in effect (a bare `TraceIdRatioBased(0.0)` would drop the
+    /// span; only respecting the parent's sampled decision keeps it).
+    pub fn install_in_memory_with_ratio(ratio: f64) -> InMemorySpanExporter {
         let exporter = InMemorySpanExporter::default();
-        let provider = super::build_provider(KeepFinishedSpans(exporter.clone()), "otel-test".into(), 1.0);
+        let provider = super::build_provider(KeepFinishedSpans(exporter.clone()), "otel-test".into(), ratio);
         super::install(provider);
         exporter
     }
