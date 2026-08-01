@@ -1,15 +1,17 @@
 //! oxide-observability — a starter crate for Oxide Boot applications.
 //!
-//! Wires up a `tracing_subscriber::fmt` subscriber (JSON in prod, pretty
-//! otherwise) via the `oxide_boot::LoggingInitializer` seam, and installs a
-//! process-global Prometheus metrics recorder so `metrics::counter!` /
-//! `metrics::gauge!` / `metrics::histogram!` calls anywhere in the
-//! application render on demand via [`prometheus_handle`].
+//! Wires up a `tracing_subscriber::registry()` subscriber (JSON in prod,
+//! pretty otherwise, plus an optional OTLP export layer — see [`otel`]) via
+//! the `oxide_boot::LoggingInitializer` seam, and installs a process-global
+//! Prometheus metrics recorder so `metrics::counter!` / `metrics::gauge!` /
+//! `metrics::histogram!` calls anywhere in the application render on demand
+//! via [`prometheus_handle`].
 
 mod actuator;
 mod http;
 mod logging;
 mod metrics;
+pub mod otel;
 
 pub use crate::metrics::prometheus_handle;
 

@@ -11,10 +11,10 @@
 //! - extracts W3C `traceparent`/`tracestate` via the process-global
 //!   OpenTelemetry propagator and attaches it as the span's parent context.
 //!
-//! The extraction step is harmless with the default noop propagator (nothing
-//! is set globally by this crate) — a later boot step (Task 9) installs a
-//! real `TraceContextPropagator` globally, at which point this same code
-//! starts producing real parent contexts without any change here.
+//! The extraction step works because [`crate::otel`] installs a real
+//! `TraceContextPropagator` globally during logging init, always (regardless
+//! of whether OTLP export itself is configured) — this code doesn't know or
+//! care whether that propagator is real or the library default noop.
 
 use tracing::Instrument;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
