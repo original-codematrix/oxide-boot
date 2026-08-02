@@ -46,10 +46,12 @@ Run the example: `cd examples/hello-world && cargo run`
 
 Add `oxide-web` as a dependency and your application gains an HTTP server for
 free: `/actuator/health` (and `/actuator/health/liveness`, `/actuator/health/readiness`)
-are wired in automatically, and any `#[component]` you annotate with
-`#[controller("/base/path")]` gets its routes mounted on boot. Errors that
-implement `IntoProblemDetail` (or are constructed via `ApiError`) render as
-RFC 7807 `application/problem+json` responses.
+are wired in automatically — served on a separate **management port**
+(default `8081`, `oxide.management.port`), not the main application port —
+and any `#[component]` you annotate with `#[controller("/base/path")]` gets
+its routes mounted on boot. Errors that implement `IntoProblemDetail` (or are
+constructed via `ApiError`) render as RFC 7807 `application/problem+json`
+responses.
 
 ```rust
 #[controller("/api/notes")]
@@ -62,6 +64,37 @@ impl NotesController {
 ```
 
 Run the example: `cd examples/rest-api && cargo run`
+
+## Observability (oxide-observability)
+
+Add `oxide-observability` as a dependency and your application gains
+structured logging and Prometheus metrics for free — JSON logs when the
+`prod` profile is active (pretty-printed otherwise), and a process-global
+metrics recorder, both wired up automatically at boot. No further code
+changes required to activate them.
+
+Every request through `oxide-web` is measured automatically: a
+`http_server_requests_seconds` histogram with `method`, `uri` (the route
+TEMPLATE, e.g. `/api/notes/{id}`, never the concrete path), and `status`
+labels. Record your own counters, gauges and histograms anywhere with the
+`metrics` crate's macros:
+
+```rust
+metrics::counter!("notes_created_total").increment(1);
+```
+
+Everything — automatic and custom metrics alike — is exposed on
+`/actuator/prometheus`, served on the **management port** (default `8081`,
+separate from the main application port) alongside `/actuator/health` and
+`/actuator/info`.
+
+Distributed tracing activates the moment `oxide.otel.endpoint` is
+configured: spans export over OTLP, W3C `traceparent`/`tracestate` headers
+propagate context across service calls, and sampling is parent-based,
+controlled via `oxide.otel.sample-ratio`.
+
+Run the example: `cd examples/rest-api && cargo run`, then
+`curl http://localhost:8081/actuator/prometheus`.
 
 ## Environment overrides
 
@@ -90,3 +123,7 @@ only once at least one existing level was matched.
 | `@GetMapping("/x")` | `#[get("/x")]` |
 | `@ExceptionHandler` / `ResponseEntity` error | `ApiError` (RFC 7807 `application/problem+json`) |
 | Spring Actuator health | `/actuator/health` (+ `/liveness`, `/readiness`) |
+| Micrometer `Counter.builder(...)` | `metrics::counter!(...)` |
+| `management.server.port` | `oxide.management.port` |
+| Sleuth / OTEL auto-instrumentation | automatic via `oxide-observability` |
+| `/actuator/prometheus` | same path, served on the management port |

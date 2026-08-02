@@ -125,6 +125,14 @@ oxide:
 - Platzhalter `${…}` in Config-Werten und Macro-Attributen (z. B. `base_url = "${oxide.clients.billing.url}"`).
 - Secrets kommen wie in K8s üblich als Env-Vars/mounted files — kein eigener Secret-Mechanismus.
 
+**Reservierte Top-Level-Keys (Task 10, 2026-07-31):** App-Config-Keys, die wie Framework-Segmente
+heißen (`server`, `management`, `otel`, `logging`, `application`), können `OXIDE_<KEY>_*`-Umgebungsvariablen
+vom Framework wegfangen — Pass 2 der Env-Binding-Regel oben bindet gegen jeden existierenden `<key>.*`-Pfad
+mit gestripptem `OXIDE_`-Prefix, bevor Pass 3 einen neuen `oxide.<key>.*`-Key anlegt, unabhängig davon, ob
+der Top-Level-Key von der App oder vom Framework stammt. Legt eine App also z. B. selbst einen `server:`-Block
+an, gewinnt `OXIDE_SERVER_PORT` gegen `server.port` (App-Config) statt einen neuen `oxide.server.port` zu
+erzeugen. Empfehlung: App-Config nicht `server`, `management`, `otel`, `logging` oder `application` nennen.
+
 ## 6. Web-Layer (`oxide-web`)
 
 Auf Axum/Hyper/Tower (produktionserprobt, erfüllt die Durchsatzanforderung deutlich).

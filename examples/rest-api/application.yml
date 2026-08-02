@@ -3,6 +3,8 @@ oxide:
     name: rest-api
   server:
     port: 8080
+  management:
+    port: 8081
   logging:
     level:
       root: info

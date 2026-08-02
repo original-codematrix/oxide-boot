@@ -4,6 +4,15 @@
 //! on error. Types live here (rather than directly in `main.rs`) so the
 //! integration test in `tests/api.rs` can see them.
 
+// oxide-observability's `LoggingInitializer`/`RouterLayer`/`ManagementRoute`
+// registrations are `inventory::submit!` statics; like `rest_api`'s own
+// components (see the forcing import in `main.rs`), they only survive into
+// the final binary if something forces the crate to be linked in. Nothing
+// else here names an `oxide_observability` item, so this import is that
+// force — remove it and `/actuator/prometheus` 404s.
+#[allow(unused_imports)]
+use oxide_observability as _;
+
 use oxide_boot::component;
 use oxide_web::{controller, ApiError};
 use axum::extract::{Json, Path};
@@ -51,6 +60,7 @@ impl NotesController {
 
     #[post("")]
     async fn create(&self, body: Json<Note>) -> Json<Note> {
+        metrics::counter!("notes_created_total").increment(1);
         Json(self.store.add(body.0))
     }
 
