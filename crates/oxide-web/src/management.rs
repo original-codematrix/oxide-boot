@@ -83,7 +83,7 @@ async fn info(config: oxide_core::Inject<AppConfig>) -> Json<serde_json::Value> 
 /// + all registered `ManagementRoute`s.
 fn build_management_router(ctx: &Context) -> Result<Router, WebError> {
     let mut router = match ctx.get::<crate::server::WebServer>() {
-        Some(server) => health::health_routes(server.readiness()),
+        Some(server) => health::health_routes(server.readiness(), health::resolve_indicators(ctx)),
         None => health::liveness_only_routes(),
     };
 

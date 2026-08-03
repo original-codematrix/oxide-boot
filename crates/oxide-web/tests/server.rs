@@ -1,5 +1,7 @@
 use oxide_boot::prelude::*;
-use oxide_web::{controller, ApiError, ManagementServer, WebServer, RouteDescriptor, WebError};
+use oxide_web::{
+    controller, ApiError, HealthIndicator, HealthStatus, ManagementServer, RouteDescriptor, WebError, WebServer,
+};
 use oxide_boot::__private::ComponentDescriptor;
 use axum::extract::{Json, Path};
 use std::collections::HashMap;
@@ -202,6 +204,61 @@ async fn controller_macro_mounts_routes_and_returns_problem_json_on_error() {
     let problem: serde_json::Value = missing.json().await.unwrap();
     assert_eq!(problem["title"], "Not Found");
     assert_eq!(problem["status"], 404);
+
+    app.stop().await.unwrap();
+}
+
+// HealthIndicator registry aggregation (Task 3). This indicator registers
+// process-globally via inventory, so every other boot test in this binary
+// now aggregates it into `/actuator/health` too — it defaults to Up, and
+// this test restores `true` before returning, so the rest of the suite
+// stays green.
+static TEST_HEALTH_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+inventory::submit! {
+    HealthIndicator {
+        name: "test-indicator",
+        register: |_ctx| {
+            Some(Box::new(|| {
+                Box::pin(async {
+                    if TEST_HEALTH_UP.load(std::sync::atomic::Ordering::SeqCst) {
+                        HealthStatus::Up
+                    } else {
+                        HealthStatus::Down { detail: "test indicator forced down".to_string() }
+                    }
+                })
+            }))
+        },
+    }
+}
+
+#[tokio::test]
+async fn health_indicator_aggregates_into_actuator_health() {
+    let _guard = BOOT_LOCK.lock().await;
+    TEST_HEALTH_UP.store(true, std::sync::atomic::Ordering::SeqCst);
+    let dir = test_config_dir();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let mgmt_addr = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
+    let base = format!("http://{mgmt_addr}");
+
+    let up = reqwest::get(format!("{base}/actuator/health")).await.unwrap();
+    assert_eq!(up.status(), 200);
+    let up_body: serde_json::Value = up.json().await.unwrap();
+    assert_eq!(up_body["status"], "UP");
+    assert_eq!(up_body["components"]["test-indicator"]["status"], "UP");
+
+    TEST_HEALTH_UP.store(false, std::sync::atomic::Ordering::SeqCst);
+
+    let down = reqwest::get(format!("{base}/actuator/health")).await.unwrap();
+    assert_eq!(down.status(), 503);
+    let down_body: serde_json::Value = down.json().await.unwrap();
+    assert_eq!(down_body["status"], "OUT_OF_SERVICE");
+    assert_eq!(down_body["components"]["test-indicator"]["status"], "DOWN");
+    assert!(down_body["components"]["test-indicator"]["detail"].as_str().is_some());
+
+    // Restore global state — this indicator is process-global (see comment
+    // above); other tests in this binary must see it as Up again.
+    TEST_HEALTH_UP.store(true, std::sync::atomic::Ordering::SeqCst);
 
     app.stop().await.unwrap();
 }
