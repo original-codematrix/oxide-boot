@@ -50,6 +50,20 @@ impl AppBuilder {
         self
     }
 
+    /// Boots the application: loads config, initializes logging, assembles
+    /// the DI container, then runs `post_construct` hooks in construction
+    /// order.
+    ///
+    /// Rollback guarantee: if a `post_construct` hook fails, `start()` does
+    /// not return immediately with the still-running components left
+    /// dangling (e.g. a management server that would otherwise linger until
+    /// process exit). Instead, before returning the error, it runs the
+    /// `pre_destroy` hooks of exactly those components whose
+    /// `post_construct` already succeeded, using the same ordering as
+    /// [`Application::stop`] (`destroy_order` asc, then reverse construction
+    /// order) restricted to that subset. Rollback hook failures are logged
+    /// via `tracing::error!` but do not change the returned `BootError` —
+    /// the caller always sees the original `post_construct` failure.
     pub async fn start(self) -> Result<Application, BootError> {
         let env = self.env.unwrap_or_else(|| std::env::vars().collect());
         let config = AppConfig::load(&self.base_dir, &env)?;
@@ -68,13 +82,19 @@ impl AppBuilder {
         let (context, order) = assemble(descriptors, seed)?;
         let context = Arc::new(context);
 
+        let mut started: Vec<&'static ComponentDescriptor> = Vec::with_capacity(order.len());
         for d in &order {
             if let Some(hook) = d.post_construct {
-                hook(&context).await.map_err(|e| BootError::PostConstruct {
-                    component: d.type_name,
-                    message: e.to_string(),
-                })?;
+                if let Err(e) = hook(&context).await {
+                    let err = BootError::PostConstruct { component: d.type_name, message: e.to_string() };
+                    let rollback: Vec<&'static ComponentDescriptor> = started.into_iter().rev().collect();
+                    if let Some(rollback_err) = run_pre_destroys(&context, rollback).await {
+                        tracing::error!(error = %rollback_err, "rollback pre_destroy hook failed after boot failure");
+                    }
+                    return Err(err);
+                }
             }
+            started.push(d);
         }
         tracing::info!(components = order.len(), "Oxide Boot started");
         Ok(Application { context, order })
@@ -112,21 +132,8 @@ impl Application {
     /// happens; the first one is returned to the caller once all hooks have
     /// run.
     pub async fn stop(self) -> Result<(), BootError> {
-        let mut first_err: Option<BootError> = None;
-        let mut hooks: Vec<&'static ComponentDescriptor> = self.order.iter().rev().copied().collect();
-        hooks.sort_by_key(|d| d.destroy_order);
-        for d in &hooks {
-            if let Some(hook) = d.pre_destroy {
-                if let Err(e) = hook(&self.context).await {
-                    let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
-                    tracing::error!(component = d.type_name, error = %err, "pre_destroy hook failed");
-                    if first_err.is_none() {
-                        first_err = Some(err);
-                    }
-                }
-            }
-        }
-        if let Some(err) = first_err {
+        let hooks: Vec<&'static ComponentDescriptor> = self.order.iter().rev().copied().collect();
+        if let Some(err) = run_pre_destroys(&self.context, hooks).await {
             return Err(err);
         }
         tracing::info!("Oxide Boot stopped");
@@ -152,6 +159,41 @@ impl Application {
         tracing::info!("shutdown signal received");
         self.stop().await
     }
+}
+
+/// Runs `pre_destroy` hooks for `descriptors`, ordered by `(destroy_order
+/// asc, then the input's own relative order)`.
+///
+/// `descriptors` must already be in reverse-construction order (as produced
+/// by e.g. `self.order.iter().rev()`); this function stably re-sorts that by
+/// `destroy_order`, so order-0 components (the vast majority) keep their
+/// reverse-construction order and higher slots (e.g. `100` for telemetry
+/// flush) run after them — see [`Application::stop`]'s doc comment for the
+/// full reasoning.
+///
+/// Every hook runs regardless of earlier failures. Each failure is logged
+/// via `tracing::error!` as it happens; the first one is returned to the
+/// caller once all hooks have run, `None` if every hook succeeded.
+///
+/// Shared by both [`Application::stop`] and [`AppBuilder::start`]'s
+/// boot-failure rollback path, so the two stay in lockstep instead of
+/// duplicating the sort-and-collect logic.
+async fn run_pre_destroys(context: &Context, descriptors: Vec<&'static ComponentDescriptor>) -> Option<BootError> {
+    let mut hooks = descriptors;
+    hooks.sort_by_key(|d| d.destroy_order);
+    let mut first_err: Option<BootError> = None;
+    for d in &hooks {
+        if let Some(hook) = d.pre_destroy {
+            if let Err(e) = hook(context).await {
+                let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
+                tracing::error!(component = d.type_name, error = %err, "pre_destroy hook failed");
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+    }
+    first_err
 }
 
 /// Built-in fallback [`crate::LoggingInitializer`], registered at priority 0
