@@ -51,6 +51,15 @@ pub struct ComponentDescriptor {
     pub construct: fn(&mut ContextBuilder) -> Result<(), ContextError>,
     pub post_construct: Option<HookFn>,
     pub pre_destroy: Option<HookFn>,
+    /// Shutdown slot: `pre_destroy` hooks run ordered by `(destroy_order
+    /// ASC, then reverse construction order)`. Framework convention: `0` is
+    /// normal components, torn down among themselves in reverse
+    /// construction order (the historical default, unchanged); `100` is
+    /// reserved for telemetry flush, which must outlive every
+    /// span/metric-producing component so it can still observe their
+    /// shutdown. Values in between are free for starters to place
+    /// themselves relative to those two anchors.
+    pub destroy_order: i32,
 }
 
 inventory::collect!(ComponentDescriptor);
@@ -86,6 +95,7 @@ impl ComponentDescriptor {
                 construct,
                 post_construct: None,
                 pre_destroy: None,
+                destroy_order: 0,
             },
         }
     }
@@ -104,6 +114,16 @@ impl ComponentDescriptorBuilder {
 
     pub const fn pre_destroy(mut self, hook: HookFn) -> Self {
         self.inner.pre_destroy = Some(hook);
+        self
+    }
+
+    /// Sets the shutdown slot. Default `0` (normal components, reverse
+    /// construction order among themselves). `100` is the framework
+    /// convention for telemetry flush — it must outlive every
+    /// span/metric-producing component, so it always runs last regardless
+    /// of construction order. Values in between are free for starters.
+    pub const fn destroy_order(mut self, order: i32) -> Self {
+        self.inner.destroy_order = order;
         self
     }
 

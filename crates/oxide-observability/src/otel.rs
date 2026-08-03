@@ -32,7 +32,8 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, Tracer, TracerProvider};
 use opentelemetry_sdk::{runtime, Resource};
-use oxide_core::AppConfig;
+use oxide_core::{AppConfig, ComponentDescriptor, Context};
+use std::any::TypeId;
 use std::sync::OnceLock;
 
 fn default_sample_ratio() -> f64 {
@@ -144,7 +145,14 @@ pub(crate) fn shutdown() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 
 /// Shutdown/flush component: presence in the context has no other effect,
 /// its `pre_destroy` is the only reason it exists.
-#[oxide_boot::component(pre_destroy = flush)]
+///
+/// Hand-written descriptor rather than `#[oxide_boot::component]`: the
+/// macro doesn't expose `destroy_order` (out of scope for this phase), and
+/// this component's entire purpose is to run its flush last. `destroy_order
+/// (100)` — the framework's reserved telemetry-flush slot — guarantees the
+/// flush runs after every span-producing component has stopped, turning
+/// what used to be an alphabetical-sort coincidence (reverse construction
+/// order among order-0 components) into an explicit guarantee.
 pub struct OtelLifecycle {}
 
 impl OtelLifecycle {
@@ -161,6 +169,23 @@ impl OtelLifecycle {
         tokio::task::spawn_blocking(shutdown).await??;
         Ok(())
     }
+}
+
+inventory::submit! {
+    ComponentDescriptor::builder(
+        "OtelLifecycle",
+        TypeId::of::<OtelLifecycle>,
+        |builder| {
+            builder.insert(OtelLifecycle {});
+            Ok(())
+        },
+    )
+    .pre_destroy(|ctx: &Context| {
+        let me = ctx.get::<OtelLifecycle>().expect("component exists during shutdown");
+        Box::pin(async move { me.flush().await })
+    })
+    .destroy_order(100)
+    .build()
 }
 
 /// Test-only seam. `#[doc(hidden)]` because it mutates process-global

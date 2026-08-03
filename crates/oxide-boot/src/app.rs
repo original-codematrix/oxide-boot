@@ -96,7 +96,15 @@ impl Application {
         &self.context
     }
 
-    /// Runs `pre_destroy` hooks in reverse construction order.
+    /// Runs `pre_destroy` hooks ordered by `(destroy_order asc, then reverse
+    /// construction order)`.
+    ///
+    /// Reverse construction order is first collected via
+    /// `self.order.iter().rev()`, then stably re-sorted by
+    /// `destroy_order` — the stable sort preserves the reverse-construction
+    /// relative order *within* each `destroy_order` value, so order-0
+    /// components (the vast majority) behave exactly as before, and higher
+    /// slots (e.g. `100` for telemetry flush) simply run after them.
     ///
     /// Every hook runs regardless of earlier failures — a failing hook (e.g.
     /// a server drain that times out) must not skip the hooks after it, such
@@ -105,7 +113,9 @@ impl Application {
     /// run.
     pub async fn stop(self) -> Result<(), BootError> {
         let mut first_err: Option<BootError> = None;
-        for d in self.order.iter().rev() {
+        let mut hooks: Vec<&'static ComponentDescriptor> = self.order.iter().rev().copied().collect();
+        hooks.sort_by_key(|d| d.destroy_order);
+        for d in &hooks {
             if let Some(hook) = d.pre_destroy {
                 if let Err(e) = hook(&self.context).await {
                     let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
