@@ -51,7 +51,12 @@ are wired in automatically — served on a separate **management port**
 and any `#[component]` you annotate with `#[controller("/base/path")]` gets
 its routes mounted on boot. Errors that implement `IntoProblemDetail` (or are
 constructed via `ApiError`) render as RFC 7807 `application/problem+json`
-responses.
+responses. (Unlike `oxide-observability` below, `oxide-web` doesn't need a
+separate forcing import for this: writing at least one `#[controller(...)]`
+impl — which every real use of `oxide-web` does — already references the
+crate directly and links it in. A dependency on `oxide-web` with zero
+controllers anywhere would not get an HTTP server, for the same linking
+reason explained below.)
 
 ```rust
 #[controller("/api/notes")]
@@ -67,11 +72,25 @@ Run the example: `cd examples/rest-api && cargo run`
 
 ## Observability (oxide-observability)
 
-Add `oxide-observability` as a dependency and your application gains
-structured logging and Prometheus metrics for free — JSON logs when the
-`prod` profile is active (pretty-printed otherwise), and a process-global
-metrics recorder, both wired up automatically at boot. No further code
-changes required to activate them.
+Add `oxide-observability` as a dependency **and** force the crate to be
+linked into your binary with one line:
+
+```rust
+// oxide-observability activates itself via `inventory::submit!`
+// registrations (logging, metrics, the actuator scrape route) — but Rust
+// only links a dependency's code into the final binary if something
+// actually references it. Nothing else in a typical app names an
+// `oxide_observability` item, so this import is that reference; remove it
+// and you silently get oxide-boot's plain-text logging fallback instead of
+// JSON/pretty logs, and no `/actuator/prometheus` route at all.
+#[allow(unused_imports)]
+use oxide_observability as _;
+```
+
+With that in place your application gains structured logging and Prometheus
+metrics for free — JSON logs when the `prod` profile is active
+(pretty-printed otherwise), and a process-global metrics recorder, both
+wired up automatically at boot.
 
 Every request through `oxide-web` is measured automatically: a
 `http_server_requests_seconds` histogram with `method`, `uri` (the route

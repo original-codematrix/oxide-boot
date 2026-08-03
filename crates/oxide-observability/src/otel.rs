@@ -47,7 +47,12 @@ fn default_sample_ratio() -> f64 {
 pub struct OtelProps {
     #[serde(default)]
     pub endpoint: Option<String>,
-    #[serde(default = "default_sample_ratio")]
+    // kebab-case YAML key, matching the framework's established style for
+    // multi-word config keys (see `ServerProps::shutdown_grace_seconds` /
+    // `shutdown-grace-seconds`) — without this rename, `oxide.otel.sample-ratio`
+    // (as documented in README.md) would silently fail to bind and the field
+    // would always fall back to its default.
+    #[serde(rename = "sample-ratio", default = "default_sample_ratio")]
     pub sample_ratio: f64,
 }
 
@@ -247,9 +252,20 @@ mod tests {
 
     #[test]
     fn otel_props_deserialize_reads_endpoint_and_sample_ratio() {
-        let props: OtelProps = serde_json::from_str(r#"{"endpoint": "http://collector:4317", "sample_ratio": 0.1}"#)
+        let props: OtelProps = serde_json::from_str(r#"{"endpoint": "http://collector:4317", "sample-ratio": 0.1}"#)
             .expect("valid object should deserialize");
         assert_eq!(props.endpoint.as_deref(), Some("http://collector:4317"));
         assert_eq!(props.sample_ratio, 0.1);
+    }
+
+    /// Regression test for a docs/code mismatch found in review: README.md
+    /// documents `oxide.otel.sample-ratio` (kebab-case, matching the
+    /// framework's style for other multi-word keys); without the
+    /// `#[serde(rename = "sample-ratio")]` above, that key would silently
+    /// fail to bind and `sample_ratio` would always be the default (1.0).
+    #[test]
+    fn otel_props_deserialize_reads_kebab_case_sample_ratio_key() {
+        let props: OtelProps = serde_json::from_str(r#"{"sample-ratio": 0.25}"#).expect("kebab key should bind");
+        assert_eq!(props.sample_ratio, 0.25);
     }
 }
