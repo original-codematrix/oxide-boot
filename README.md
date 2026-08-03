@@ -124,7 +124,12 @@ outside `oxide:` (e.g. `greeter:`) env-overridable, so `OXIDE_GREETER_NAME`
 maps to `greeter.name` when `greeter:` exists in the YAML; (3) otherwise a new
 key is created under `oxide.a.b`. "Existing" means intermediate levels must
 already be present as keys — only the final leaf may be newly created, and
-only once at least one existing level was matched.
+only once at least one existing level was matched. Kebab-case leaves (e.g.
+`sample-ratio`, `shutdown-grace-seconds`) can only be matched this way, not
+newly created: `OXIDE_OTEL_SAMPLE_RATIO` maps back to `sample-ratio` when that
+key already exists under `oxide.otel`, but if it doesn't, the env var creates
+a nested `oxide.otel.sample.ratio` path instead — silently missing the
+kebab-case key it was meant to override.
 
 ## Spring-to-Oxide cheat sheet
 

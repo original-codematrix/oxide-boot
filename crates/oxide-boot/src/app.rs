@@ -97,14 +97,27 @@ impl Application {
     }
 
     /// Runs `pre_destroy` hooks in reverse construction order.
+    ///
+    /// Every hook runs regardless of earlier failures — a failing hook (e.g.
+    /// a server drain that times out) must not skip the hooks after it, such
+    /// as an OTEL flush that still needs to run. Each failure is logged as it
+    /// happens; the first one is returned to the caller once all hooks have
+    /// run.
     pub async fn stop(self) -> Result<(), BootError> {
+        let mut first_err: Option<BootError> = None;
         for d in self.order.iter().rev() {
             if let Some(hook) = d.pre_destroy {
-                hook(&self.context).await.map_err(|e| BootError::PreDestroy {
-                    component: d.type_name,
-                    message: e.to_string(),
-                })?;
+                if let Err(e) = hook(&self.context).await {
+                    let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
+                    tracing::error!(component = d.type_name, error = %err, "pre_destroy hook failed");
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
             }
+        }
+        if let Some(err) = first_err {
+            return Err(err);
         }
         tracing::info!("Oxide Boot stopped");
         Ok(())

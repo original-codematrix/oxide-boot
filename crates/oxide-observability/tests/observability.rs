@@ -76,6 +76,11 @@ async fn http_requests_are_measured_with_route_template_labels() {
     assert!(scrape.contains("http_server_requests_seconds"), "scrape: {scrape}");
     assert!(scrape.contains("uri=\"/ping/{name}\""), "route template label missing: {scrape}");
     assert!(scrape.contains("status=\"200\""), "scrape: {scrape}");
+    // Proves histogram rendering (bucketed `_bucket{...,le="..."}` series),
+    // not the default Prometheus summary — quantiles must be aggregatable
+    // across instances via `histogram_quantile()` in Grafana.
+    assert!(scrape.contains("http_server_requests_seconds_bucket{"), "no bucket series: {scrape}");
+    assert!(scrape.contains("le=\""), "no le= bucket label: {scrape}");
 
     app.stop().await.unwrap();
 }
