@@ -321,6 +321,53 @@ cargo test -p http-client        # boots an in-process server and calls the clie
 | `FeignException` / `ResponseEntity` | `ClientError::Http { status, body }` |
 | `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (and per-client timeout/retry props) |
 
+## Tests (oxide-test)
+
+A `spring-boot-test`-style harness: boot the application under test on
+ephemeral ports (no collisions) and drive it through a preconfigured HTTP
+client. Two ways to use it:
+
+**Annotation** — the `@SpringBootTest` equivalent. Mark an `async fn` with
+`#[oxide_test]`; it bootstraps the app from `CARGO_MANIFEST_DIR` on the `test`
+profile and hands the body a booted `&TestApplication`:
+
+```rust
+use oxide_test::oxide_test;
+
+#[oxide_test]
+async fn notes_flow(app: &oxide_test::TestApplication) {
+    app.client().post("/api/notes").json(&Note { id: 1, text: "hi".into() }).send().await.unwrap();
+    let list: Vec<Note> = app.client().get("/api/notes").send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1);
+}
+```
+
+**Builder** — fine-grained control:
+
+```rust
+let app = oxide_test::TestApp::builder().base_dir(env!("CARGO_MANIFEST_DIR")).start().await.unwrap();
+app.client().post("/api/notes").json(&Note { id: 1, text: "hi".into() }).send().await.unwrap();
+app.stop().await.unwrap();
+```
+
+`TestApp::builder().start()` boots with `OXIDE_SERVER_PORT=0` /
+`OXIDE_MANAGEMENT_PORT=0` (ephemeral ports) by default; `.test_profile()`
+activates `application-test.yml`, and `.env(...)` adds overrides. `app.client()`
+targets the main web server, `app.management_client()` the management
+(`/actuator`) server. Component replacement (`replace::<T>(mock)`) and packaged
+testcontainers fixtures are part of the roadmap.
+
+Run an app's integration tests with a real container (see `examples/http-client`,
+`examples/kafka`, `crates/oxide-kafka`, `crates/oxide-mongo` for Redpanda/Mongo-
+backed suites).
+
+| Spring Boot Test | Oxide Boot |
+|---|---|
+| `@SpringBootTest` | `#[oxide_test]` / `oxide_test::TestApp::builder().start()` |
+| `@ActiveProfiles("test")` | `.test_profile()` |
+| `MockMvc` / `TestRestTemplate` | `TestWebClient` (`app.client()` / `management_client()`) |
+| random ports | implied (`OXIDE_SERVER_PORT=0` etc.) |
+
 ## Environment overrides
 
 An env var `OXIDE_A_B` binds in this order: (1) an existing key under
