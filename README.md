@@ -4,8 +4,10 @@ A Spring-Boot-like application framework for Rust: components, dependency
 injection, `application.yml` with profiles, and an opinionated boot lifecycle —
 built on Tokio and battle-tested crates.
 
-**Status: Phase 1 (foundation).** Web, MongoDB, Kafka, HTTP client and
-observability starters are planned — see `docs/superpowers/specs/`.
+**Status: Phase 3 (integrations) complete; Phase 4 (hardening) in progress.**
+Web, observability, Kafka, MongoDB, HTTP client and test starters are
+implemented — see `docs/superpowers/specs/` for the design and the phase-4
+hardening backlog.
 
 ## Quick start
 
