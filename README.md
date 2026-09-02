@@ -44,6 +44,31 @@ greeter:
 
 Run the example: `cd examples/hello-world && cargo run`
 
+## Development
+
+Toolchain: Rust **1.88+** (`rust-version` in `Cargo.toml`); `rust-toolchain.toml`
+selects the current stable with `rustfmt` and `clippy`. `Cargo.lock` is tracked so
+builds and security scans are reproducible.
+
+One-time setup for the security tooling:
+
+```sh
+cargo install cargo-audit cargo-deny --locked
+```
+
+Container-backed tests (Kafka, MongoDB, the `kafka`/`rest-api` examples) need a
+running Docker daemon; they pin host ports `9092` and `27017`.
+
+```sh
+make ci       # everything below
+make check    # fmt --check, clippy -D warnings, cargo test --workspace
+make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
+```
+
+Policy lives in `deny.toml`: RUSTSEC advisories fail the build, licenses must be
+on the allowlist (permissive only, no copyleft), and every ignored advisory needs
+a written reason next to it.
+
 ## Web (oxide-web)
 
 Add `oxide-web` as a dependency and your application gains an HTTP server for
