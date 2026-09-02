@@ -241,3 +241,27 @@ Priorität.
 - §10: Scheduler (fehlt komplett).
 - §11: Runtime-Metriken (Tokio, CPU/RSS/FDs); `trace_id`/`span_id` in Logzeilen.
 - §12: `TestApp::replace::<T>(mock)`; Testcontainer-Fixtures in `oxide-test`.
+
+### A.5 Spring-Parität der Bibliotheks-Bausteine (Anforderung 2026-09-02)
+
+Der Nutzer erwartet, dass die gängigen Spring-Boot-Bausteine ein klares Oxide-Gegenstück
+haben. Kandidatenliste für Phase 4c, jeweils mit heutigem Stand:
+
+| Spring | Oxide heute | Lücke |
+|---|---|---|
+| `@Import(Config.class)` / Auto-Configuration-Aktivierung | `#[allow(unused_imports)] use oxide_kafka as _;` (Link-Erzwingung) | Explizites `#[oxide_boot::main(imports = [oxide_kafka, oxide_observability])]` oder `OxideApplication::builder().import::<oxide_kafka::Starter>()`, damit das Link-Verhalten nicht mehr vom Zufall abhängt |
+| `@SpringBootTest` | `#[oxide_test]`, `TestApp::builder()` | vorhanden |
+| `@ActiveProfiles("test")` | `.test_profile()` | vorhanden |
+| `@MockBean` / `@SpyBean` | — | `TestApp::builder().replace::<T>(mock)`; Trait-Injection als Voraussetzung (§4) |
+| `@TestConfiguration` | — | Test-lokale Components, die nur im Test-Kontext registriert werden |
+| `@EmbeddedKafka` | Harness 3× kopiert | `oxide_test::containers::redpanda()` Fixture |
+| `@DataMongoTest` | Harness in `oxide-mongo/tests` | `oxide_test::containers::mongo()` Fixture + Slice-Boot nur mit Mongo-Starter |
+| `@WebMvcTest` (Slice-Test) | — | Boot nur mit `oxide-web`, ohne Kafka/Mongo-Starter |
+| `MockMvc` / `TestRestTemplate` | `TestWebClient` | vorhanden |
+| `@TestPropertySource` | `.env(...)` | vorhanden, ggf. `.property("a.b", v)` als Zucker |
+| `@DirtiesContext` | — | Kein Bedarf (jeder Test bootet eigenen Context) |
+| `@Scheduled` | — | Scheduler (§10) |
+| `@Validated` / `@Valid` | — | §6 Validierung |
+| `@ConfigurationProperties` + `@Validated` | `#[derive(ConfigProperties)]` | Validierung beim Start fehlt (§5) |
+| `@Conditional…` / `@Profile("x")` auf Beans | — | Bewusst kein Runtime-IoC (Nicht-Ziel V1); `#[component(profile = "x")]` als minimales Gegenstück prüfen |
+| `@EventListener` / `ApplicationEventPublisher` | — | Einfacher In-Process-Event-Bus als Kandidat, Priorität niedrig |
