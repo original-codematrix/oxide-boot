@@ -1,0 +1,48 @@
+# cargo-deny policy for the oxide-boot workspace.
+# Run: cargo deny check   (or `make audit`)
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Every entry here needs a `reason`. Remove entries as soon as a fix exists.
+ignore = [
+    { id = "RUSTSEC-2025-0052", reason = "unmaintained only; pulled by opentelemetry_sdk 0.27, removed with the phase-4b otel upgrade" },
+]
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",              # ryu
+    "CDLA-Permissive-2.0",  # webpki-roots
+]
+confidence-threshold = 0.8
+# Workspace crates with `publish = false` and no `license` field (examples).
+private = { ignore = true }
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal crates are declared as `path` deps with no `version` in
+# the root Cargo.toml (see `[workspace.dependencies]`); cargo-deny otherwise
+# flags every one of them as a "wildcard dependency" even though they are
+# pinned by virtue of being in the same workspace/lockfile.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -28,20 +28,20 @@ rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-oxide-core = { path = "crates/oxide-core" }
-oxide-macros = { path = "crates/oxide-macros" }
-oxide-boot = { path = "crates/oxide-boot" }
-oxide-web = { path = "crates/oxide-web" }
-oxide-web-macros = { path = "crates/oxide-web-macros" }
-oxide-observability = { path = "crates/oxide-observability" }
-oxide-kafka = { path = "crates/oxide-kafka" }
-oxide-kafka-macros = { path = "crates/oxide-kafka-macros" }
-oxide-mongo = { path = "crates/oxide-mongo" }
-oxide-mongo-macros = { path = "crates/oxide-mongo-macros" }
-oxide-client = { path = "crates/oxide-client" }
-oxide-client-macros = { path = "crates/oxide-client-macros" }
-oxide-test = { path = "crates/oxide-test" }
-oxide-test-macros = { path = "crates/oxide-test-macros" }
+oxide-core = { path = "crates/oxide-core", version = "0.1.0" }
+oxide-macros = { path = "crates/oxide-macros", version = "0.1.0" }
+oxide-boot = { path = "crates/oxide-boot", version = "0.1.0" }
+oxide-web = { path = "crates/oxide-web", version = "0.1.0" }
+oxide-web-macros = { path = "crates/oxide-web-macros", version = "0.1.0" }
+oxide-observability = { path = "crates/oxide-observability", version = "0.1.0" }
+oxide-kafka = { path = "crates/oxide-kafka", version = "0.1.0" }
+oxide-kafka-macros = { path = "crates/oxide-kafka-macros", version = "0.1.0" }
+oxide-mongo = { path = "crates/oxide-mongo", version = "0.1.0" }
+oxide-mongo-macros = { path = "crates/oxide-mongo-macros", version = "0.1.0" }
+oxide-client = { path = "crates/oxide-client", version = "0.1.0" }
+oxide-client-macros = { path = "crates/oxide-client-macros", version = "0.1.0" }
+oxide-test = { path = "crates/oxide-test", version = "0.1.0" }
+oxide-test-macros = { path = "crates/oxide-test-macros", version = "0.1.0" }
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
 testcontainers = "0.28"
 axum = "0.8"
