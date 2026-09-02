@@ -229,6 +229,9 @@ Priorität.
 | F8 | `oxide-observability` greift auf `oxide_web::__private::axum`; `oxide-boot::__private` re-exportiert `oxide_core::*` pauschal | `oxide-observability/src/actuator.rs:7-10`, `oxide-boot/src/lib.rs:16` |
 | F9 | `oxide-kafka` zieht `opentelemetry_sdk` mit Feature `testing` als normale Dependency | `crates/oxide-kafka/Cargo.toml:19` |
 | F10 | Duplizierte Validierung/Defaults (`default_port`, `application.name`-Auflösung) | `management.rs:14-19,56-68`, `server.rs:10-15`, `routing.rs:21-34`, `otel.rs:39-41,97`, `app.rs:72` |
+| F11 | testcontainers 0.28 (dev-only) zieht via bollard-buildkit-proto einen zweiten gRPC-Stack (tonic 0.14, prost 0.14) neben tonic 0.12/prost 0.13 (opentelemetry-otlp 0.27); `multiple-versions = "warn"` wird lauter. Beim OTel-Upgrade in 4b auf einen tonic-Major zusammenführen | `Cargo.lock` |
+| F12 | Die 14 Bibliotheks-Crates sind publishable (`publish` nicht gesetzt), haben aber weder `description` noch `repository`; `cargo publish` würde sie ablehnen. Entweder Metadaten ergänzen oder `publish = false` setzen (Nicht-Ziel V1: kein crates.io) | `crates/*/Cargo.toml` |
+| F13 | `rust-toolchain.toml` mit `channel = "stable"` ist nicht reproduzierbar: neue rustfmt/clippy-Releases können `make ci` auf unverändertem Baum rot machen, und die MSRV 1.88 wird nie geprüft. Entscheidung in 4b: expliziten Channel pinnen und/oder `make msrv` (`cargo +1.88 check --workspace`) | `rust-toolchain.toml`, `Makefile` |
 
 ### A.4 Lücken zum Gesamtdesign (Kandidaten für Phase 4c)
 
