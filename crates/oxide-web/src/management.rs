@@ -17,6 +17,9 @@ fn default_port() -> u16 {
 fn default_enabled() -> bool {
     true
 }
+fn default_address() -> String {
+    "0.0.0.0".to_string()
+}
 
 /// Drain grace period for the management server. Management endpoints
 /// (health, info, metrics) don't hold long-running requests, so a short,
@@ -28,6 +31,8 @@ const MANAGEMENT_SHUTDOWN_GRACE_SECONDS: u64 = 5;
 #[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.management", default)]
 pub struct ManagementProps {
+    #[serde(default = "default_address")]
+    pub address: String,
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(default = "default_enabled")]
@@ -36,7 +41,7 @@ pub struct ManagementProps {
 
 impl Default for ManagementProps {
     fn default() -> Self {
-        Self { port: default_port(), enabled: default_enabled() }
+        Self { address: default_address(), port: default_port(), enabled: default_enabled() }
     }
 }
 
@@ -116,8 +121,12 @@ pub struct ManagementServer {
 
 impl ManagementServer {
     fn new(props: ManagementProps) -> Self {
-        let serving =
-            HttpServing::new(props.port, "management server", Duration::from_secs(MANAGEMENT_SHUTDOWN_GRACE_SECONDS));
+        let serving = HttpServing::new(
+            props.address.clone(),
+            props.port,
+            "management server",
+            Duration::from_secs(MANAGEMENT_SHUTDOWN_GRACE_SECONDS),
+        );
         Self { props, serving }
     }
 

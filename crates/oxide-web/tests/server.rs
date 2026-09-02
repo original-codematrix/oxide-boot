@@ -47,6 +47,18 @@ async fn boots_serves_health_and_shuts_down() {
 }
 
 #[tokio::test]
+async fn server_binds_to_configured_loopback_address() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir();
+    let mut env = HashMap::new();
+    env.insert("OXIDE_SERVER_ADDRESS".to_string(), "127.0.0.1".to_string());
+    let app = OxideApplication::builder().base_dir(dir.path()).env(env).start().await.unwrap();
+    let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();
+    assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    app.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn actuator_lives_on_management_port_not_main_port() {
     let _guard = BOOT_LOCK.lock().await;
     let dir = test_config_dir();

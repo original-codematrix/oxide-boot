@@ -18,6 +18,7 @@ struct ServingRuntime {
 /// distinguishable; `grace` bounds how long `stop` waits for in-flight
 /// requests to drain before aborting the serve task.
 pub(crate) struct HttpServing {
+    address: String,
     port: u16,
     name: &'static str,
     grace: Duration,
@@ -27,8 +28,9 @@ pub(crate) struct HttpServing {
 }
 
 impl HttpServing {
-    pub(crate) fn new(port: u16, name: &'static str, grace: Duration) -> Self {
+    pub(crate) fn new(address: String, port: u16, name: &'static str, grace: Duration) -> Self {
         Self {
+            address,
             port,
             name,
             grace,
@@ -44,7 +46,7 @@ impl HttpServing {
     }
 
     pub(crate) async fn start(&self, router: axum::Router) -> ComponentResult<SocketAddr> {
-        let listener = tokio::net::TcpListener::bind(("0.0.0.0", self.port))
+        let listener = tokio::net::TcpListener::bind((self.address.as_str(), self.port))
             .await
             .map_err(|source| crate::WebError::Bind { port: self.port, source })?;
         let local_addr = listener.local_addr().map_err(|source| crate::WebError::Bind { port: self.port, source })?;

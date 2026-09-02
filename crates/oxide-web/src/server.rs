@@ -13,12 +13,17 @@ fn default_port() -> u16 {
 fn default_grace() -> u64 {
     30
 }
+fn default_address() -> String {
+    "0.0.0.0".to_string()
+}
 
 /// Configuration bound to the `oxide.server` prefix. The section may be
 /// absent entirely (falls back to `Default`).
 #[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.server", default)]
 pub struct ServerProps {
+    #[serde(default = "default_address")]
+    pub address: String,
     #[serde(default = "default_port")]
     pub port: u16,
     #[serde(rename = "shutdown-grace-seconds", default = "default_grace")]
@@ -27,7 +32,7 @@ pub struct ServerProps {
 
 impl Default for ServerProps {
     fn default() -> Self {
-        Self { port: default_port(), shutdown_grace_seconds: default_grace() }
+        Self { address: default_address(), port: default_port(), shutdown_grace_seconds: default_grace() }
     }
 }
 
@@ -43,6 +48,7 @@ impl WebServer {
         Self {
             readiness: Arc::new(AtomicBool::new(false)),
             serving: HttpServing::new(
+                props.address,
                 props.port,
                 "HTTP server",
                 std::time::Duration::from_secs(props.shutdown_grace_seconds),
@@ -112,5 +118,17 @@ mod tests {
         let props: ServerProps = serde_json::from_str("{}").expect("empty object should deserialize with defaults");
         assert_eq!(props.port, 8080);
         assert_eq!(props.shutdown_grace_seconds, 30);
+    }
+
+    #[test]
+    fn server_props_default_address_is_all_interfaces() {
+        assert_eq!(ServerProps::default().address, "0.0.0.0");
+    }
+
+    #[test]
+    fn server_props_deserialize_reads_address() {
+        let props: ServerProps = serde_json::from_str(r#"{"address":"127.0.0.1","port":1234}"#).unwrap();
+        assert_eq!(props.address, "127.0.0.1");
+        assert_eq!(props.port, 1234);
     }
 }
