@@ -20,6 +20,9 @@ fn default_enabled() -> bool {
 fn default_address() -> String {
     "0.0.0.0".to_string()
 }
+fn default_exposure() -> String {
+    "health,info".to_string()
+}
 
 /// Drain grace period for the management server. Management endpoints
 /// (health, info, metrics) don't hold long-running requests, so a short,
@@ -37,12 +40,43 @@ pub struct ManagementProps {
     pub port: u16,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(rename = "endpoints", default)]
+    pub endpoints: EndpointsProps,
 }
 
 impl Default for ManagementProps {
     fn default() -> Self {
-        Self { address: default_address(), port: default_port(), enabled: default_enabled() }
+        Self {
+            address: default_address(),
+            port: default_port(),
+            enabled: default_enabled(),
+            endpoints: EndpointsProps::default(),
+        }
     }
+}
+
+/// Which actuator endpoints get mounted, bound to `oxide.management.endpoints`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EndpointsProps {
+    #[serde(default = "default_exposure")]
+    pub exposure: String,
+}
+
+impl Default for EndpointsProps {
+    fn default() -> Self {
+        Self { exposure: default_exposure() }
+    }
+}
+
+/// Whether `endpoint` (e.g. `"health"`, `"info"`, `"prometheus"`) is
+/// mounted, per `exposure` (a comma-separated list, or `"*"` for
+/// everything). Entries are trimmed before comparison.
+pub fn is_exposed(exposure: &str, endpoint: &str) -> bool {
+    let exposure = exposure.trim();
+    if exposure == "*" {
+        return true;
+    }
+    exposure.split(',').map(str::trim).any(|entry| entry == endpoint)
 }
 
 /// One route contributed to the management server by another part of the
@@ -51,6 +85,10 @@ impl Default for ManagementProps {
 /// contract as `RouteDescriptor`.
 pub struct ManagementRoute {
     pub path: &'static str,
+    /// The actuator endpoint name (e.g. `"health"`, `"info"`, `"prometheus"`)
+    /// this route belongs to, checked against `oxide.management.endpoints.exposure`
+    /// via [`is_exposed`] before mounting.
+    pub endpoint: &'static str,
     pub register: fn(&Context, Router) -> Result<Router, WebError>,
 }
 
@@ -85,25 +123,33 @@ async fn info(config: oxide_core::Inject<AppConfig>) -> Json<serde_json::Value> 
 /// Assembles the management router: health (readiness-aware if a
 /// `WebServer` is in the context, liveness-only otherwise) + `/actuator/info`
 /// + all registered `ManagementRoute`s.
-fn build_management_router(ctx: &Context) -> Result<Router, WebError> {
-    let mut router = match ctx.get::<crate::server::WebServer>() {
-        Some(server) => health::health_routes(server.readiness(), health::resolve_indicators(ctx)),
-        None => health::liveness_only_routes(),
-    };
+fn build_management_router(ctx: &Context, exposure: &str) -> Result<Router, WebError> {
+    let mut router = Router::new();
+    if is_exposed(exposure, "health") {
+        router = router.merge(match ctx.get::<crate::server::WebServer>() {
+            Some(server) => health::health_routes(server.readiness(), health::resolve_indicators(ctx)),
+            None => health::liveness_only_routes(),
+        });
+    }
 
-    let config = ctx.get::<AppConfig>().expect("AppConfig is always seeded by OxideApplication");
-    router = router.route(
-        "/actuator/info",
-        axum::routing::get(move || {
-            let config = config.clone();
-            async move { info(config).await }
-        }),
-    );
+    if is_exposed(exposure, "info") {
+        let config = ctx.get::<AppConfig>().expect("AppConfig is always seeded by OxideApplication");
+        router = router.route(
+            "/actuator/info",
+            axum::routing::get(move || {
+                let config = config.clone();
+                async move { info(config).await }
+            }),
+        );
+    }
 
     let mut routes: Vec<&ManagementRoute> = inventory::iter::<ManagementRoute>().collect();
     routes.sort_by_key(|r| r.path);
     validate_management_routes(&routes)?;
     for route in routes {
+        if !is_exposed(exposure, route.endpoint) {
+            continue;
+        }
         router = (route.register)(ctx, router)?;
         tracing::info!(path = route.path, "management route mounted");
     }
@@ -163,7 +209,7 @@ inventory::submit! {
         if !me.props.enabled {
             return Box::pin(async move { Ok(()) });
         }
-        let router = build_management_router(ctx);
+        let router = build_management_router(ctx, &me.props.endpoints.exposure);
         Box::pin(async move { me.start(router?).await })
     })
     .pre_destroy(|ctx: &Context| {
@@ -190,6 +236,23 @@ mod tests {
     }
 
     #[test]
+    fn exposure_matches_listed_endpoints_only() {
+        assert!(is_exposed("health,info", "health"));
+        assert!(is_exposed(" health , info ", "info"));
+        assert!(!is_exposed("health,info", "prometheus"));
+    }
+
+    #[test]
+    fn exposure_wildcard_matches_everything() {
+        assert!(is_exposed("*", "prometheus"));
+    }
+
+    #[test]
+    fn management_props_default_exposes_health_and_info_only() {
+        assert_eq!(ManagementProps::default().endpoints.exposure, "health,info");
+    }
+
+    #[test]
     fn management_props_deserialize_empty_uses_defaults() {
         let props: ManagementProps = serde_json::from_str("{}").expect("empty object should deserialize with defaults");
         assert_eq!(props.port, 8081);
@@ -202,8 +265,8 @@ mod tests {
 
     #[test]
     fn management_routes_reject_duplicate_paths() {
-        let a = ManagementRoute { path: "/actuator/prometheus", register: dummy_register };
-        let b = ManagementRoute { path: "/actuator/prometheus", register: dummy_register };
+        let a = ManagementRoute { path: "/actuator/prometheus", endpoint: "prometheus", register: dummy_register };
+        let b = ManagementRoute { path: "/actuator/prometheus", endpoint: "prometheus", register: dummy_register };
         let routes = vec![&a, &b];
         let err = validate_management_routes(&routes).unwrap_err();
         assert!(matches!(err, WebError::DuplicateRoute { path: "/actuator/prometheus", .. }));
@@ -211,8 +274,8 @@ mod tests {
 
     #[test]
     fn management_routes_accept_distinct_paths() {
-        let a = ManagementRoute { path: "/actuator/prometheus", register: dummy_register };
-        let b = ManagementRoute { path: "/actuator/other", register: dummy_register };
+        let a = ManagementRoute { path: "/actuator/prometheus", endpoint: "prometheus", register: dummy_register };
+        let b = ManagementRoute { path: "/actuator/other", endpoint: "other", register: dummy_register };
         let routes = vec![&a, &b];
         assert!(validate_management_routes(&routes).is_ok());
     }

@@ -1,6 +1,7 @@
 inventory::submit! {
     oxide_web::ManagementRoute {
         path: "/actuator/prometheus",
+        endpoint: "prometheus",
         register: |_ctx, router| {
             Ok(router.route(
                 "/actuator/prometheus",

@@ -5,6 +5,8 @@ oxide:
     port: 8080
   management:
     port: 8081
+    endpoints:
+      exposure: "health,info,prometheus"
   logging:
     level:
       root: info

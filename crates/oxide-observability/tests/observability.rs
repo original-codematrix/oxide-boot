@@ -45,10 +45,25 @@ async fn second_boot_in_same_process_does_not_panic_on_recorder() {
 }
 
 #[tokio::test]
-async fn prometheus_endpoint_scrapes_custom_metrics() {
+async fn prometheus_route_is_absent_unless_exposed() {
     let _guard = BOOT_LOCK.lock().await;
     let dir = test_config_dir("  server:\n    port: 0\n  management:\n    port: 0\n");
     let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let mgmt_addr = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
+
+    let status = reqwest::get(format!("http://{mgmt_addr}/actuator/prometheus")).await.unwrap().status();
+    assert_eq!(status, 404);
+
+    app.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn prometheus_endpoint_scrapes_custom_metrics() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir("  server:\n    port: 0\n  management:\n    port: 0\n");
+    let env =
+        HashMap::from([("OXIDE_MANAGEMENT_ENDPOINTS_EXPOSURE".to_string(), "health,info,prometheus".to_string())]);
+    let app = OxideApplication::builder().base_dir(dir.path()).env(env).start().await.unwrap();
     let mgmt = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
 
     metrics::counter!("scrape_probe_total").increment(1);
@@ -64,7 +79,9 @@ async fn prometheus_endpoint_scrapes_custom_metrics() {
 async fn http_requests_are_measured_with_route_template_labels() {
     let _guard = BOOT_LOCK.lock().await;
     let dir = test_config_dir("  server:\n    port: 0\n  management:\n    port: 0\n");
-    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    let env =
+        HashMap::from([("OXIDE_MANAGEMENT_ENDPOINTS_EXPOSURE".to_string(), "health,info,prometheus".to_string())]);
+    let app = OxideApplication::builder().base_dir(dir.path()).env(env).start().await.unwrap();
     let main = app.context().get::<oxide_web::WebServer>().unwrap().local_addr().unwrap();
     let mgmt = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
 
