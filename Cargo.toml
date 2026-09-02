@@ -9,6 +9,8 @@ members = [
     "crates/oxide-observability",
     "crates/oxide-kafka",
     "crates/oxide-kafka-macros",
+    "crates/oxide-mongo",
+    "crates/oxide-mongo-macros",
     "examples/hello-world",
     "examples/rest-api",
     "examples/kafka",
@@ -29,9 +31,12 @@ oxide-web-macros = { path = "crates/oxide-web-macros" }
 oxide-observability = { path = "crates/oxide-observability" }
 oxide-kafka = { path = "crates/oxide-kafka" }
 oxide-kafka-macros = { path = "crates/oxide-kafka-macros" }
+oxide-mongo = { path = "crates/oxide-mongo" }
+oxide-mongo-macros = { path = "crates/oxide-mongo-macros" }
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
 testcontainers = "0.23"
 axum = "0.8"
+mongodb = "3.8"
 tower = "0.5"
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

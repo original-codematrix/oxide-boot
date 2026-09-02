@@ -211,6 +211,71 @@ There is also a self-contained `examples/kafka` demo (producer + listener +
 retry/DLT): start Redpanda on :9092 and run `cargo run -p kafka`, or
 `cargo test -p kafka` for a container-backed end-to-end verification.
 
+## MongoDB (oxide-mongo)
+
+Add `oxide-mongo` as a dependency and configure it under `oxide.mongo`
+(`bootstrap`-style: `uri` **required**):
+
+```yaml
+oxide:
+  mongo:
+    uri: "mongodb://localhost:27017"
+    database: oxide
+    ping-on-start: true
+```
+
+Mark a struct as a document and define a repository in Spring-Data style. The
+`#[mongo_repository]` macro parses the method names into queries and validates
+against the document at compile time where possible; everything outside the
+grammar uses the `#[query]` escape hatch (raw filter with `?1`/`?2`
+placeholders).
+
+```rust
+use oxide_mongo::Document;
+
+#[derive(Document, serde::Serialize, serde::Deserialize)]
+#[collection = "users"]
+struct User {
+    #[id]
+    #[serde(rename = "_id")]
+    id: mongodb::bson::oid::ObjectId,
+    email: String,
+    status: String,
+    age: i32,
+}
+
+#[oxide_mongo::mongo_repository(document = User)]
+trait UserRepository {
+    // CRUD from the codegen: find_by_id, find_all, count, save, delete_by_id
+    async fn find_by_id(&self, id: mongodb::bson::oid::ObjectId) -> oxide_mongo::Result<Option<User>>;
+    async fn save(&self, user: &User) -> oxide_mongo::Result<()>;
+
+    // Derived queries: find_by_<field>[(_and_ <field>)*][(_greater_than|_lt|_in|...)],
+    // count_by_<field>, exists_by_<field>, delete_by_<field>
+    async fn find_all_by_status(&self, status: String) -> oxide_mongo::Result<Vec<User>>;
+    async fn count_by_status(&self, status: String) -> oxide_mongo::Result<u64>;
+    async fn find_by_age_greater_than(&self, age: i32) -> oxide_mongo::Result<Vec<User>>;
+
+    // Escape hatch for anything special.
+    #[query(filter = r#"{ "status": ?1, "age": { "$gt": ?2 } }"#)]
+    async fn find_special(&self, status: String, min_age: i32) -> oxide_mongo::Result<Vec<User>>;
+}
+```
+
+The repository implementation is `UserRepositoryImpl` (obtain it from the DI
+context). `oxide-observability` metrics/spans fire per Mongo command, and
+`/actuator/health` reports a `mongo` component (UP/DOWN) as long as
+`oxide.mongo.uri` is configured.
+
+| Spring Data | Oxide Boot |
+|---|---|
+| `@Document(collection = "users")` | `#[derive(Document)]` + `#[collection = "users"]` |
+| `@Id` | `#[id]` on a (renamed `_id`) field |
+| `findByStatusAndAgeGreaterThan(...)` | `find_all_by_status_and_age_greater_than(...)` |
+| `MongoRepository<T, ID>` | `#[mongo_repository(document = T)] trait …` |
+| `@Query("{...}")` with `?0` | `#[query(filter = r#"{... ?1 ...}"#)]` (1-based placeholders) |
+| `spring.data.mongodb.uri` | `oxide.mongo.uri` |
+
 ## Environment overrides
 
 An env var `OXIDE_A_B` binds in this order: (1) an existing key under
