@@ -346,7 +346,7 @@ cargo test -p http-client        # boots an in-process server and calls the clie
 | `@PathVariable String id` | `id: Path<String>` |
 | `@RequestBody X body` | `body: Json<X>` |
 | `FeignException` / `ResponseEntity` | `ClientError::Http { status, body }` |
-| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (and per-client timeout/retry props) |
+| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (timeout/retry props are on the phase-4c backlog) |
 
 ## Tests (oxide-test)
 

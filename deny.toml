@@ -7,6 +7,7 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+unmaintained = "workspace"
 # Every entry here needs a `reason`. Remove entries as soon as a fix exists.
 ignore = [
     { id = "RUSTSEC-2025-0052", reason = "unmaintained only; pulled by opentelemetry_sdk 0.27, removed with the phase-4b otel upgrade" },
@@ -36,12 +37,10 @@ private = { ignore = true }
 
 [bans]
 multiple-versions = "warn"
+# Internal crates are path deps that also carry `version = "0.1.0"` in the
+# root Cargo.toml: cargo-deny's wildcard check only exempts `publish = false`
+# crates, and the library crates are publishable. Do not remove those pins.
 wildcards = "deny"
-# Workspace-internal crates are declared as `path` deps with no `version` in
-# the root Cargo.toml (see `[workspace.dependencies]`); cargo-deny otherwise
-# flags every one of them as a "wildcard dependency" even though they are
-# pinned by virtue of being in the same workspace/lockfile.
-allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
