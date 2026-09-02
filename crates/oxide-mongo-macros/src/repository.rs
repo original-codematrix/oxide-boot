@@ -229,10 +229,10 @@ fn expand_query_method(attrs: &[Attribute], sig: &Signature) -> Result<TokenStre
         list.parse_nested_meta(|meta| {
             if meta.path.is_ident("filter") {
                 let v: syn::Expr = meta.value()?.parse()?;
-                if let syn::Expr::Lit(el) = v {
-                    if let syn::Lit::Str(s) = el.lit {
-                        found = Some(s);
-                    }
+                if let syn::Expr::Lit(el) = v
+                    && let syn::Lit::Str(s) = el.lit
+                {
+                    found = Some(s);
                 }
             }
             Ok(())

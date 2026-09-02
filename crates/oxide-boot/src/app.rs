@@ -84,15 +84,15 @@ impl AppBuilder {
 
         let mut started: Vec<&'static ComponentDescriptor> = Vec::with_capacity(order.len());
         for d in &order {
-            if let Some(hook) = d.post_construct {
-                if let Err(e) = hook(&context).await {
-                    let err = BootError::PostConstruct { component: d.type_name, message: e.to_string() };
-                    let rollback: Vec<&'static ComponentDescriptor> = started.into_iter().rev().collect();
-                    if let Some(rollback_err) = run_pre_destroys(&context, rollback).await {
-                        tracing::error!(error = %rollback_err, "rollback pre_destroy hook failed after boot failure");
-                    }
-                    return Err(err);
+            if let Some(hook) = d.post_construct
+                && let Err(e) = hook(&context).await
+            {
+                let err = BootError::PostConstruct { component: d.type_name, message: e.to_string() };
+                let rollback: Vec<&'static ComponentDescriptor> = started.into_iter().rev().collect();
+                if let Some(rollback_err) = run_pre_destroys(&context, rollback).await {
+                    tracing::error!(error = %rollback_err, "rollback pre_destroy hook failed after boot failure");
                 }
+                return Err(err);
             }
             started.push(d);
         }
@@ -183,13 +183,13 @@ async fn run_pre_destroys(context: &Context, descriptors: Vec<&'static Component
     hooks.sort_by_key(|d| d.destroy_order);
     let mut first_err: Option<BootError> = None;
     for d in &hooks {
-        if let Some(hook) = d.pre_destroy {
-            if let Err(e) = hook(context).await {
-                let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
-                tracing::error!(component = d.type_name, error = %err, "pre_destroy hook failed");
-                if first_err.is_none() {
-                    first_err = Some(err);
-                }
+        if let Some(hook) = d.pre_destroy
+            && let Err(e) = hook(context).await
+        {
+            let err = BootError::PreDestroy { component: d.type_name, message: e.to_string() };
+            tracing::error!(component = d.type_name, error = %err, "pre_destroy hook failed");
+            if first_err.is_none() {
+                first_err = Some(err);
             }
         }
     }

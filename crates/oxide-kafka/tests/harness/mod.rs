@@ -113,10 +113,10 @@ async fn container() -> &'static ContainerRef {
                 loop {
                     let mut config = rdkafka::ClientConfig::new();
                     config.set("bootstrap.servers", address.as_str());
-                    if let Ok(consumer) = config.create::<rdkafka::consumer::BaseConsumer>() {
-                        if consumer.fetch_metadata(None, std::time::Duration::from_secs(1)).is_ok() {
-                            break;
-                        }
+                    if let Ok(consumer) = config.create::<rdkafka::consumer::BaseConsumer>()
+                        && consumer.fetch_metadata(None, std::time::Duration::from_secs(1)).is_ok()
+                    {
+                        break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }

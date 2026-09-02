@@ -93,10 +93,10 @@ inventory::submit! {
                     message: format!("failed to connect: {e}"),
                 }
             })?;
-            if props.ping_on_start {
-                if let Err(e) = client.ping().await {
-                    tracing::error!(error = %e, "mongo ping at boot failed");
-                }
+            if props.ping_on_start
+                && let Err(e) = client.ping().await
+            {
+                tracing::error!(error = %e, "mongo ping at boot failed");
             }
             Ok(())
         })
