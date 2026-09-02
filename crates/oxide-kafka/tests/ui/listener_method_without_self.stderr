@@ -1,0 +1,5 @@
+error: kafka listener methods must take &self as their first parameter
+ --> tests/ui/listener_method_without_self.rs:8:5
+  |
+8 |     async fn no_self(payload: String) {}
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

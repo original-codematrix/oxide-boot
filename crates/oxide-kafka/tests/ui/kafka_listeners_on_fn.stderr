@@ -1,0 +1,5 @@
+error: #[kafka_listeners] must be applied to an impl block
+ --> tests/ui/kafka_listeners_on_fn.rs:4:1
+  |
+4 | async fn not_an_impl() {}
+  | ^^^^^

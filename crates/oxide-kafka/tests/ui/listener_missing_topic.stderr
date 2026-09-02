@@ -1,0 +1,5 @@
+error: #[kafka_listener] requires a `topic = "..."` argument
+ --> tests/ui/listener_missing_topic.rs:8:14
+  |
+8 |     async fn missing_topic(&self, payload: String) {}
+  |              ^^^^^^^^^^^^^

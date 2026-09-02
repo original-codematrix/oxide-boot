@@ -115,6 +115,102 @@ controlled via `oxide.otel.sample-ratio`.
 Run the example: `cd examples/rest-api && cargo run`, then
 `curl http://localhost:8081/actuator/prometheus`.
 
+## Kafka (oxide-kafka)
+
+Add `oxide-kafka` as a dependency **and** force the crate to be linked into
+your binary with one line:
+
+```rust
+// oxide-kafka registers its listener descriptors and the kafka health
+// indicator via `inventory::submit!`; like oxide-observability, it only gets
+// linked if something references it. This import is that reference.
+#[allow(unused_imports)]
+use oxide_kafka as _;
+```
+
+Kafka is configured under `oxide.kafka`. `bootstrap-servers` is **required** —
+if the crate is linked and that key is missing, boot fails fast.
+
+```yaml
+oxide:
+  kafka:
+    bootstrap-servers: "localhost:9092"
+    consumer:
+      auto-offset-reset: earliest   # default
+      concurrency: 4                # default: partitions processed in parallel
+      retry:
+        max-attempts: 3             # default (total incl. first)
+        backoff-initial-ms: 100     # default
+        backoff-multiplier: 2.0     # default
+        dlt-enabled: true           # default
+    producer:
+      idempotence: true             # default
+    properties:                     # optional librdkafka passthrough
+      message.timeout.ms: 10000
+```
+
+Publish records with the injectable `KafkaProducer`:
+
+```rust
+#[component]
+struct OrderService { producer: oxide_kafka::KafkaProducer }
+
+impl OrderService {
+    async fn create(&self, id: u32) {
+        self.producer.send("orders", &id.to_string(), &json!({"id": id})).await.unwrap();
+    }
+}
+```
+
+Consume with `#[kafka_listeners]` on an impl block (each method becomes one
+listener; the first parameter is the JSON payload type, optional `MessageKey`
+/ `MessageHeaders` follow):
+
+```rust
+#[component]
+struct OrderListener {}
+
+#[kafka_listeners]
+impl OrderListener {
+    #[kafka_listener(topic = "orders", group_id = "orders-group")]
+    async fn on_order(&self, order: serde_json::Value, key: oxide_kafka::MessageKey) -> Result<(), String> {
+        tracing::info!(key = ?key.0, "order received");
+        Ok(())
+    }
+}
+```
+
+Behavior: within a partition messages are processed strictly in order; up to
+`consumer.concurrency` handlers run in parallel across partitions. Offsets are
+committed **after** the handler succeeds (at-least-once). A failing handler is
+retried with exponential backoff (blocking its partition); once `max-attempts`
+are exhausted the record is published to `<topic>.DLT` with `x-exception-message`,
+`x-original-topic`, `x-original-partition`, `x-original-offset` headers and then
+committed (with `dlt-enabled: false` it is logged and committed instead). If the
+DLT publish itself fails, the offset is **not** committed (the record is
+redelivered rather than lost).
+
+Observability is automatic: `kafka.send` (producer) and `kafka.process`
+(consumer) spans connect **into one trace end-to-end** via a W3C `traceparent`
+header injected into each record. Metrics:
+
+- `kafka_producer_send_seconds{topic, result}` histogram
+- `kafka_listener_seconds{topic, group, result}` histogram
+- `kafka_listener_retries_total{topic, group}`, `kafka_listener_dlt_total{topic, group}` counters
+- `kafka_consumer_lag{topic, partition, group}` gauge
+
+and `/actuator/health` reports a `kafka` component (UP/DOWN with detail) as long
+as `bootstrap-servers` is configured.
+
+Run the end-to-end example: `cd examples/rest-api && cargo run`, then create a
+note (`curl -X POST localhost:8080/api/notes -d '{"id":1,"text":"hi"}' -H 'content-type: application/json'`)
+and watch the listener log a `note created event received`; `curl
+localhost:8081/actuator/health` shows the `kafka` component UP.
+
+There is also a self-contained `examples/kafka` demo (producer + listener +
+retry/DLT): start Redpanda on :9092 and run `cargo run -p kafka`, or
+`cargo test -p kafka` for a container-backed end-to-end verification.
+
 ## Environment overrides
 
 An env var `OXIDE_A_B` binds in this order: (1) an existing key under
@@ -151,3 +247,8 @@ kebab-case key it was meant to override.
 | `management.server.port` | `oxide.management.port` |
 | Sleuth / OTEL auto-instrumentation | automatic via `oxide-observability` |
 | `/actuator/prometheus` | same path, served on the management port |
+| `@KafkaListener(topic = "x", groupId = "g")` | `#[kafka_listener(topic = "x", group_id = "g")]` (inside `#[kafka_listeners]` impl) |
+| `KafkaTemplate.send(topic, key, value)` | `KafkaProducer::send(topic, key, value)` |
+| `DeadLetterPublishingRecoverer` | built in — exhausted records go to `<topic>.DLT` |
+| `spring.kafka.bootstrap-servers` | `oxide.kafka.bootstrap-servers` |
+| Spring-Kafka consumer lag | `kafka_consumer_lag{topic, partition, group}` |

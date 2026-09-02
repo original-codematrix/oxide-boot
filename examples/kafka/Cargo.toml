@@ -1,0 +1,20 @@
+[package]
+name = "kafka"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+oxide-core.workspace = true
+oxide-boot.workspace = true
+oxide-kafka.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+testcontainers.workspace = true
+libc = "0.2"
+rdkafka.workspace = true

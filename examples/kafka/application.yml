@@ -1,0 +1,13 @@
+oxide:
+  application:
+    name: kafka-example
+  kafka:
+    bootstrap-servers: "localhost:9092"
+    consumer:
+      auto-offset-reset: earliest
+      retry:
+        max-attempts: 3
+        backoff-initial-ms: 100
+  logging:
+    level:
+      root: info

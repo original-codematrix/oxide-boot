@@ -8,3 +8,5 @@ oxide:
   logging:
     level:
       root: info
+  kafka:
+    bootstrap-servers: "localhost:9092"
