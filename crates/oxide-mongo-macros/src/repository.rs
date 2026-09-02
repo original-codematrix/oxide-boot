@@ -75,9 +75,13 @@ pub fn expand(args: proc_macro2::TokenStream, item: proc_macro2::TokenStream) ->
 fn arg_idents(sig: &Signature) -> Vec<syn::Ident> {
     sig.inputs
         .iter()
-        .filter_map(|a| if let FnArg::Typed(pt) = a {
-            if let syn::Pat::Ident(id) = &*pt.pat { Some(id.ident.clone()) } else { None }
-        } else { None })
+        .filter_map(|a| {
+            if let FnArg::Typed(pt) = a {
+                if let syn::Pat::Ident(id) = &*pt.pat { Some(id.ident.clone()) } else { None }
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -88,16 +92,34 @@ fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStr
     match method_name {
         "find_by_id" => {
             let id = &args[0];
-            return ok(quote! { ::oxide_mongo::__private::find_by_id(&self.collection, ::oxide_mongo::__private::to_bson(&#id).map_err(::oxide_mongo::Error::Bson)?).await });
+            return ok(
+                quote! { ::oxide_mongo::__private::find_by_id(&self.collection, ::oxide_mongo::__private::to_bson(&#id).map_err(::oxide_mongo::Error::Bson)?).await },
+            );
         }
-        "find_all" => return ok(quote! { ::oxide_mongo::__private::find_all(&self.collection, ::oxide_mongo::__private::doc!{}).await }),
-        "count" | "count_all" => return ok(quote! { ::oxide_mongo::__private::count(&self.collection, ::oxide_mongo::__private::doc!{}).await }),
+        "find_all" => {
+            return ok(
+                quote! { ::oxide_mongo::__private::find_all(&self.collection, ::oxide_mongo::__private::doc!{}).await },
+            );
+        }
+        "count" | "count_all" => {
+            return ok(
+                quote! { ::oxide_mongo::__private::count(&self.collection, ::oxide_mongo::__private::doc!{}).await },
+            );
+        }
         "delete_by_id" => {
             let id = &args[0];
-            return ok(quote! { ::oxide_mongo::__private::delete_one(&self.collection, ::oxide_mongo::__private::doc!{ "_id": ::oxide_mongo::__private::to_bson(&#id).map_err(::oxide_mongo::Error::Bson)? }).await });
+            return ok(
+                quote! { ::oxide_mongo::__private::delete_one(&self.collection, ::oxide_mongo::__private::doc!{ "_id": ::oxide_mongo::__private::to_bson(&#id).map_err(::oxide_mongo::Error::Bson)? }).await },
+            );
         }
-        "save" => { let d = &args[0]; return ok(quote! { ::oxide_mongo::__private::save(&self.collection, #d).await }); }
-        "insert" => { let d = &args[0]; return ok(quote! { ::oxide_mongo::__private::insert(&self.collection, #d).await }); }
+        "save" => {
+            let d = &args[0];
+            return ok(quote! { ::oxide_mongo::__private::save(&self.collection, #d).await });
+        }
+        "insert" => {
+            let d = &args[0];
+            return ok(quote! { ::oxide_mongo::__private::insert(&self.collection, #d).await });
+        }
         _ => {}
     }
 
@@ -111,12 +133,11 @@ fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStr
     };
 
     let conditions = parse_conditions(&cond_rest, sig)?;
-    let pairs: Vec<TokenStream> = conditions
+    let pairs: Vec<TokenStream> = conditions.iter().map(|(f, op)| quote! { (#f, #op) }).collect();
+    let bson_args: Vec<TokenStream> = args
         .iter()
-        .map(|(f, op)| quote! { (#f, #op) })
+        .map(|a| quote! { ::oxide_mongo::__private::to_bson(&#a).map_err(::oxide_mongo::Error::Bson)? })
         .collect();
-    let bson_args: Vec<TokenStream> =
-        args.iter().map(|a| quote! { ::oxide_mongo::__private::to_bson(&#a).map_err(::oxide_mongo::Error::Bson)? }).collect();
 
     match verb {
         "find" | "find_all" => ok(quote! {

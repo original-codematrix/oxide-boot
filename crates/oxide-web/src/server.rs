@@ -4,8 +4,8 @@
 use crate::serve::HttpServing;
 use oxide_core::{ComponentDescriptor, ComponentResult, Context};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn default_port() -> u16 {
     8080
@@ -109,8 +109,7 @@ mod tests {
 
     #[test]
     fn server_props_deserialize_empty_uses_defaults() {
-        let props: ServerProps =
-            serde_json::from_str("{}").expect("empty object should deserialize with defaults");
+        let props: ServerProps = serde_json::from_str("{}").expect("empty object should deserialize with defaults");
         assert_eq!(props.port, 8080);
         assert_eq!(props.shutdown_grace_seconds, 30);
     }

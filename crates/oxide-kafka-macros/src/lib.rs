@@ -10,7 +10,5 @@ use proc_macro::TokenStream;
 /// KafkaListenerManager on boot.
 #[proc_macro_attribute]
 pub fn kafka_listeners(args: TokenStream, item: TokenStream) -> TokenStream {
-    listeners::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    listeners::expand(args.into(), item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
 }

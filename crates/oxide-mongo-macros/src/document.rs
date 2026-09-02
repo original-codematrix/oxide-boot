@@ -16,12 +16,8 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     };
 
     // Collection name: `#[collection("x")]` on the struct, else snake_case name.
-    let collection: Option<LitStr> = input
-        .attrs
-        .iter()
-        .find(|a| a.path().is_ident("collection"))
-        .map(|a| a.parse_args::<LitStr>())
-        .transpose()?;
+    let collection: Option<LitStr> =
+        input.attrs.iter().find(|a| a.path().is_ident("collection")).map(|a| a.parse_args::<LitStr>()).transpose()?;
     let collection_lit = match collection {
         Some(c) => quote! { #c },
         None => {
@@ -48,9 +44,8 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             }
         }
     }
-    let id_field = id_field.ok_or_else(|| {
-        syn::Error::new_spanned(ident, "#[derive(Document)] requires one field marked #[id]")
-    })?;
+    let id_field = id_field
+        .ok_or_else(|| syn::Error::new_spanned(ident, "#[derive(Document)] requires one field marked #[id]"))?;
 
     let field_names_lit = field_names;
     let indices_ty = quote! { &'static [oxide_mongo::document::IndexDecl] };

@@ -3,7 +3,7 @@
 //! `ListenerDescriptor` registrations collected by `inventory`.
 
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{FnArg, ImplItem, ItemImpl, LitStr, Pat, Type};
 
 pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
@@ -77,10 +77,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         method.attrs.remove(attr_idx);
 
         // Listener methods must take &self as their first parameter.
-        let is_shared_self = method
-            .sig
-            .receiver()
-            .is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
+        let is_shared_self = method.sig.receiver().is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
         if !is_shared_self {
             return Err(syn::Error::new_spanned(
                 &method.sig,
@@ -114,11 +111,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         let mut headers_ident: Option<syn::Ident> = None;
         for (ident, ty) in &params {
             let is_named = |name: &str| -> bool {
-                if let Type::Path(tp) = ty {
-                    tp.path.segments.last().is_some_and(|s| s.ident == name)
-                } else {
-                    false
-                }
+                if let Type::Path(tp) = ty { tp.path.segments.last().is_some_and(|s| s.ident == name) } else { false }
             };
             if is_named("MessageKey") {
                 key_ident = Some(ident.clone());

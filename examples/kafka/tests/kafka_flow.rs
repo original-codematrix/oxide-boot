@@ -9,8 +9,8 @@ use oxide_boot::OxideApplication;
 use oxide_kafka::kafka_listeners;
 use rdkafka::consumer::Consumer;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Once;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use testcontainers::core::IntoContainerPort;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{GenericImage, ImageExt};
@@ -50,21 +50,19 @@ async fn ensure_broker_ready() {
     CONTAINER
         .get_or_init(|| async {
             let build = || {
-                GenericImage::new("redpandadata/redpanda", "v24.2.1")
-                    .with_mapped_port(9092, 9092.tcp())
-                    .with_cmd([
-                        "redpanda",
-                        "start",
-                        "--mode",
-                        "dev-container",
-                        "--overprovisioned",
-                        "--smp",
-                        "1",
-                        "--memory",
-                        "1G",
-                        "--set",
-                        "redpanda.empty_seed_starts_cluster=true",
-                    ])
+                GenericImage::new("redpandadata/redpanda", "v24.2.1").with_mapped_port(9092, 9092.tcp()).with_cmd([
+                    "redpanda",
+                    "start",
+                    "--mode",
+                    "dev-container",
+                    "--overprovisioned",
+                    "--smp",
+                    "1",
+                    "--memory",
+                    "1G",
+                    "--set",
+                    "redpanda.empty_seed_starts_cluster=true",
+                ])
             };
             let mut node = None;
             for attempt in 0..8 {
@@ -115,12 +113,7 @@ async fn producer_publishes_and_listener_consumes() {
     )
     .unwrap();
 
-    let app = OxideApplication::builder()
-        .base_dir(&dir)
-        .env(HashMap::new())
-        .start()
-        .await
-        .expect("boot kafka example");
+    let app = OxideApplication::builder().base_dir(&dir).env(HashMap::new()).start().await.expect("boot kafka example");
 
     // OrderProducer.post_construct sent the Order successfully (boot would have
     // errored otherwise); wait for the observer listener to consume it.

@@ -1,7 +1,7 @@
 //! Mongo configuration and the `MongoClient` lifecycle component, plus the
 //! low-level collection helpers generated repository code calls into.
 
-use mongodb::bson::{doc, Bson, Document};
+use mongodb::bson::{Bson, Document, doc};
 use mongodb::{Client, Collection};
 use oxide_core::{ComponentDescriptor, Context};
 use std::sync::{Arc, OnceLock};

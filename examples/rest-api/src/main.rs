@@ -5,9 +5,9 @@
 // final executable, so the assembler finds zero components and the router
 // mounts zero routes at boot. Verified by removing this import: the boot
 // log then reports `components=0` instead of the expected non-zero count.
+use oxide_boot::prelude::*;
 #[allow(unused_imports)]
 use rest_api::*;
-use oxide_boot::prelude::*;
 
 #[oxide_boot::main]
 async fn main() {

@@ -1,7 +1,7 @@
-use oxide_boot::component;
-use oxide_boot::prelude::*;
 use oxide_boot::__private::{ComponentDescriptor, Context};
 use oxide_boot::ConfigProperties;
+use oxide_boot::component;
+use oxide_boot::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -66,12 +66,7 @@ async fn boots_reads_config_runs_hooks_and_stops() {
 
     let dir = test_config_dir();
 
-    let app = OxideApplication::builder()
-        .base_dir(dir.path())
-        .env(HashMap::new())
-        .start()
-        .await
-        .unwrap();
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
 
     let cfg = app.context().get::<AppConfig>().unwrap();
     assert_eq!(cfg.get::<String>("oxide.application.name").unwrap(), "probe-app");

@@ -11,8 +11,10 @@ pub use config::{MongoClient, MongoProps};
 /// Internal paths referenced by generated macro code.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::config::{count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, insert, merge, raw_filter, save};
-    pub use mongodb::bson::{self, doc, to_bson, Bson, Document};
+    pub use crate::config::{
+        count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, insert, merge, raw_filter, save,
+    };
+    pub use mongodb::bson::{self, Bson, Document, doc, to_bson};
     pub use mongodb::{Collection, Database};
     pub use oxide_core::{ComponentDescriptor, Context};
     pub use serde::de::DeserializeOwned;
@@ -39,4 +41,4 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Re-exported for `#[mongo_repository]` users.
-pub use oxide_mongo_macros::{mongo_repository, Document};
+pub use oxide_mongo_macros::{Document, mongo_repository};

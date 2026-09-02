@@ -42,8 +42,8 @@ impl KafkaProducer {
 
     /// Serializes `value` as JSON and sends it with a string key.
     pub async fn send<T: Serialize>(&self, topic: &str, key: &str, value: &T) -> Result<Delivery, KafkaError> {
-        let payload = serde_json::to_vec(value)
-            .map_err(|e| KafkaError::Serialize { topic: topic.to_string(), source: e })?;
+        let payload =
+            serde_json::to_vec(value).map_err(|e| KafkaError::Serialize { topic: topic.to_string(), source: e })?;
         self.send_raw(topic, Some(key.as_bytes()), &payload, None).await
     }
 
@@ -59,11 +59,7 @@ impl KafkaProducer {
     ) -> Result<Delivery, KafkaError> {
         // Normalize incoming headers into a mutable (name, value) list.
         let mut header_list: Vec<(String, Vec<u8>)> = headers
-            .map(|h| {
-                h.iter()
-                    .map(|h| (h.key.to_string(), h.value.map(|v| v.to_vec()).unwrap_or_default()))
-                    .collect()
-            })
+            .map(|h| h.iter().map(|h| (h.key.to_string(), h.value.map(|v| v.to_vec()).unwrap_or_default())).collect())
             .unwrap_or_default();
 
         // The `kafka.send` span (created inside the caller's active scope, so a child
@@ -85,11 +81,7 @@ impl KafkaProducer {
         let record = record.headers(owned);
 
         let started = Instant::now();
-        let result = self
-            .producer
-            .send(record, Timeout::After(Duration::from_secs(10)))
-            .instrument(span)
-            .await;
+        let result = self.producer.send(record, Timeout::After(Duration::from_secs(10))).instrument(span).await;
 
         let outcome = match result {
             Ok((partition, offset)) => Ok(Delivery { partition, offset }),

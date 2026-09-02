@@ -166,18 +166,13 @@ pub struct Context {
 
 impl Context {
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Inject<T>> {
-        self.map
-            .get(&TypeId::of::<T>())
-            .and_then(|any| Arc::clone(any).downcast::<T>().ok())
-            .map(Inject)
+        self.map.get(&TypeId::of::<T>()).and_then(|any| Arc::clone(any).downcast::<T>().ok()).map(Inject)
     }
 }
 
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Context")
-            .field("component_count", &self.map.len())
-            .finish_non_exhaustive()
+        f.debug_struct("Context").field("component_count", &self.map.len()).finish_non_exhaustive()
     }
 }
 
@@ -255,9 +250,15 @@ mod tests {
     use super::*;
     use std::any::TypeId;
 
-    struct Config { greeting: String }
-    struct Repo { prefix: String }
-    struct Service { repo: Inject<Repo> }
+    struct Config {
+        greeting: String,
+    }
+    struct Repo {
+        prefix: String,
+    }
+    struct Service {
+        repo: Inject<Repo>,
+    }
 
     // `ComponentDescriptor` is `#[non_exhaustive]`, so even here (inside
     // oxide-core, where struct literals would still be legal) tests go
@@ -289,15 +290,11 @@ mod tests {
 
     #[test]
     fn builder_produces_equivalent_descriptor() {
-        let d = ComponentDescriptor::builder(
-            "Built",
-            TypeId::of::<Repo>,
-            |b| {
-                let cfg = b.resolve::<Config>()?;
-                b.insert(Repo { prefix: cfg.greeting.clone() });
-                Ok(())
-            },
-        )
+        let d = ComponentDescriptor::builder("Built", TypeId::of::<Repo>, |b| {
+            let cfg = b.resolve::<Config>()?;
+            b.insert(Repo { prefix: cfg.greeting.clone() });
+            Ok(())
+        })
         .deps(|| vec![(TypeId::of::<Config>(), "Config")])
         .build();
         assert_eq!(d.type_name, "Built");
@@ -310,10 +307,16 @@ mod tests {
         struct Zebra;
         struct Alpha;
         // Registered Zebra first — order must still be alphabetical (deterministic).
-        static ZEBRA: ComponentDescriptor =
-            ComponentDescriptor::builder("Zebra", TypeId::of::<Zebra>, |b| { b.insert(Zebra); Ok(()) }).build();
-        static ALPHA: ComponentDescriptor =
-            ComponentDescriptor::builder("Alpha", TypeId::of::<Alpha>, |b| { b.insert(Alpha); Ok(()) }).build();
+        static ZEBRA: ComponentDescriptor = ComponentDescriptor::builder("Zebra", TypeId::of::<Zebra>, |b| {
+            b.insert(Zebra);
+            Ok(())
+        })
+        .build();
+        static ALPHA: ComponentDescriptor = ComponentDescriptor::builder("Alpha", TypeId::of::<Alpha>, |b| {
+            b.insert(Alpha);
+            Ok(())
+        })
+        .build();
         let (_ctx, order) = assemble(vec![&ZEBRA, &ALPHA], ContextBuilder::new()).unwrap();
         let names: Vec<_> = order.iter().map(|d| d.type_name).collect();
         assert_eq!(names, vec!["Alpha", "Zebra"]);

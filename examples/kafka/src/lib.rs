@@ -10,7 +10,7 @@ use oxide_kafka as _;
 
 use oxide_boot::component;
 use oxide_core::ComponentResult;
-use oxide_kafka::{kafka_listeners, KafkaProducer, MessageKey};
+use oxide_kafka::{KafkaProducer, MessageKey, kafka_listeners};
 use serde::{Deserialize, Serialize};
 
 /// The business payload flowing through Kafka.

@@ -17,11 +17,8 @@ impl PingController {
 
 fn test_config_dir(extra: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("application.yml"),
-        format!("oxide:\n  application:\n    name: obs-test\n{extra}"),
-    )
-    .unwrap();
+    std::fs::write(dir.path().join("application.yml"), format!("oxide:\n  application:\n    name: obs-test\n{extra}"))
+        .unwrap();
     dir
 }
 

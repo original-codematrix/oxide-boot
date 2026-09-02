@@ -27,11 +27,11 @@
 //! `try_init` calls in `logging.rs`.
 
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::{global, KeyValue};
+use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, Tracer, TracerProvider};
-use opentelemetry_sdk::{runtime, Resource};
+use opentelemetry_sdk::{Resource, runtime};
 use oxide_core::{AppConfig, ComponentDescriptor, Context};
 use std::any::TypeId;
 use std::sync::OnceLock;
@@ -194,9 +194,9 @@ inventory::submit! {
 /// process also touches that global state.
 #[doc(hidden)]
 pub mod testing {
+    use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::export::trace::{ExportResult, SpanData, SpanExporter};
     use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
-    use opentelemetry_sdk::Resource;
 
     /// Wraps `InMemorySpanExporter` to swallow `shutdown()`.
     ///

@@ -1,7 +1,7 @@
 //! Application lifecycle: config loading, logging init, DI assembly, and
 //! ordered `post_construct` / `pre_destroy` hook execution.
 
-use oxide_core::{assemble, AppConfig, ComponentDescriptor, ConfigError, Context, ContextBuilder, ContextError};
+use oxide_core::{AppConfig, ComponentDescriptor, ConfigError, Context, ContextBuilder, ContextError, assemble};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -145,8 +145,8 @@ impl Application {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
-            let mut sigterm =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("install SIGTERM handler");
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
             tokio::select! {
                 _ = ctrl_c => {},
                 _ = sigterm.recv() => {},
@@ -201,8 +201,6 @@ async fn run_pre_destroys(context: &Context, descriptors: Vec<&'static Component
 /// with an `EnvFilter` built from `oxide.logging.level.*` config keys.
 pub(crate) fn fallback_fmt_init(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // try_init: keep the first subscriber if tests boot multiple apps.
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(crate::logging::logging_directives(config))
-        .try_init();
+    let _ = tracing_subscriber::fmt().with_env_filter(crate::logging::logging_directives(config)).try_init();
     Ok(())
 }

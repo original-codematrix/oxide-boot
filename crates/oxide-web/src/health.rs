@@ -4,8 +4,8 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use oxide_core::Context;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The health timeout applied to each registered check, per request. A
@@ -137,10 +137,7 @@ mod tests {
         let readiness = Arc::new(AtomicBool::new(false));
         let router = health_routes(readiness, Vec::new());
 
-        let request = Request::builder()
-            .uri("/actuator/health/readiness")
-            .body(Body::empty())
-            .unwrap();
+        let request = Request::builder().uri("/actuator/health/readiness").body(Body::empty()).unwrap();
         let response = router.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);

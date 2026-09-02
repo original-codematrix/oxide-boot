@@ -1,4 +1,4 @@
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -77,12 +77,7 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            [(header::CONTENT_TYPE, "application/problem+json")],
-            axum::Json(self.problem),
-        )
-            .into_response()
+        (self.status, [(header::CONTENT_TYPE, "application/problem+json")], axum::Json(self.problem)).into_response()
     }
 }
 
@@ -100,8 +95,14 @@ impl<E: IntoProblemDetail> From<E> for ApiError {
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {
     #[error("cannot bind HTTP server to port {port}: {source}")]
-    Bind { port: u16, #[source] source: std::io::Error },
-    #[error("controller '{type_name}' (route '{path}') is not registered as a component — add #[component] to the struct")]
+    Bind {
+        port: u16,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "controller '{type_name}' (route '{path}') is not registered as a component — add #[component] to the struct"
+    )]
     ControllerNotRegistered { type_name: &'static str, path: &'static str },
     #[error("duplicate route registered: {method} {path}")]
     DuplicateRoute { method: &'static str, path: &'static str },
@@ -151,13 +152,19 @@ mod tests {
 
     #[test]
     fn custom_errors_convert_via_into_problem_detail() {
-        enum DomainError { NotFound }
+        enum DomainError {
+            NotFound,
+        }
         impl IntoProblemDetail for DomainError {
             fn into_problem(self) -> ApiError {
-                match self { DomainError::NotFound => ApiError::not_found() }
+                match self {
+                    DomainError::NotFound => ApiError::not_found(),
+                }
             }
         }
-        fn fallible() -> Result<(), ApiError> { Err(DomainError::NotFound)? }
+        fn fallible() -> Result<(), ApiError> {
+            Err(DomainError::NotFound)?
+        }
         assert_eq!(fallible().unwrap_err().status(), StatusCode::NOT_FOUND);
     }
 }

@@ -33,9 +33,9 @@ extern "C" fn cleanup_container() {
 async fn ensure_container() {
     CONTAINER
         .get_or_init(|| async {
+            use testcontainers::ImageExt;
             use testcontainers::core::IntoContainerPort;
             use testcontainers::runners::AsyncRunner;
-            use testcontainers::ImageExt;
             let build = || {
                 testcontainers::GenericImage::new("redpandadata/redpanda", "v24.2.1")
                     .with_mapped_port(9092, 9092.tcp())
@@ -110,8 +110,14 @@ async fn create_fetch_and_kafka_flow() {
     // `notes-events` topic label.
     let scrape = async {
         for _ in 0..40 {
-            let s =
-                client.get(format!("http://{mgmt_addr}/actuator/prometheus")).send().await.unwrap().text().await.unwrap();
+            let s = client
+                .get(format!("http://{mgmt_addr}/actuator/prometheus"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
             if s.contains("kafka_producer_send_seconds") && s.contains("kafka_listener_seconds") {
                 return s;
             }

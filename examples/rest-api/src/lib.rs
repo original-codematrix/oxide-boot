@@ -18,10 +18,10 @@ use oxide_observability as _;
 #[allow(unused_imports)]
 use oxide_kafka as _;
 
+use axum::extract::{Json, Path};
 use oxide_boot::component;
 use oxide_kafka::kafka_listeners;
-use oxide_web::{controller, ApiError};
-use axum::extract::{Json, Path};
+use oxide_web::{ApiError, controller};
 use std::sync::Mutex;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]

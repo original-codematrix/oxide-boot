@@ -30,7 +30,7 @@ fn expand(item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStrea
     for arg in input.sig.inputs.iter() {
         match arg {
             FnArg::Receiver(_) => {
-                return Err(syn::Error::new_spanned(arg, "#[oxide_test] test functions must not take `self`"))
+                return Err(syn::Error::new_spanned(arg, "#[oxide_test] test functions must not take `self`"));
             }
             FnArg::Typed(pt) => {
                 let Pat::Ident(pid) = &*pt.pat else {

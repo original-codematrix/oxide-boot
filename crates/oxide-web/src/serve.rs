@@ -6,7 +6,7 @@
 use oxide_core::ComponentResult;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 struct ServingRuntime {
     shutdown: Option<oneshot::Sender<()>>,
@@ -47,9 +47,7 @@ impl HttpServing {
         let listener = tokio::net::TcpListener::bind(("0.0.0.0", self.port))
             .await
             .map_err(|source| crate::WebError::Bind { port: self.port, source })?;
-        let local_addr = listener
-            .local_addr()
-            .map_err(|source| crate::WebError::Bind { port: self.port, source })?;
+        let local_addr = listener.local_addr().map_err(|source| crate::WebError::Bind { port: self.port, source })?;
         let (tx, rx) = oneshot::channel::<()>();
         let handle = tokio::spawn(async move {
             axum::serve(listener, router)
@@ -84,11 +82,7 @@ impl HttpServing {
                     tracing::info!(server = self.name, "stopped");
                 }
                 Err(_) => {
-                    tracing::warn!(
-                        server = self.name,
-                        grace_seconds = self.grace.as_secs(),
-                        "drain timed out"
-                    );
+                    tracing::warn!(server = self.name, grace_seconds = self.grace.as_secs(), "drain timed out");
                     handle.abort();
                 }
             }

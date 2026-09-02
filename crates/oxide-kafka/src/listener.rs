@@ -13,14 +13,14 @@
 //!   async offset commit. On shutdown, supervisors stop polling, in-flight
 //!   handlers finish, and last commits are flushed before teardown.
 
+use crate::KafkaError;
 use crate::config::KafkaProps;
 use crate::producer::KafkaProducer;
 use crate::retry::{backoff_sequence, publish_to_dlt};
-use crate::KafkaError;
 use oxide_core::{AppConfig, ComponentDescriptor, Context, Inject};
+use rdkafka::Message;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::message::{BorrowedMessage, Headers};
-use rdkafka::Message;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -157,7 +157,11 @@ fn resolve_group_id(ctx: &Context, descriptor: &ListenerDescriptor) -> String {
 /// Builds a consumer for a single listener descriptor and subscribes it.
 /// The consumer carries a `StatsContext` (for the consumer-lag gauge) and is
 /// configured with a periodic statistics interval.
-fn build_consumer(props: &KafkaProps, group: &str, offset_reset: &str) -> Arc<StreamConsumer<crate::observe::StatsContext>> {
+fn build_consumer(
+    props: &KafkaProps,
+    group: &str,
+    offset_reset: &str,
+) -> Arc<StreamConsumer<crate::observe::StatsContext>> {
     let config = props.client_config(&[
         ("group.id", group.to_string()),
         ("enable.auto.commit", "false".to_string()),
@@ -165,7 +169,8 @@ fn build_consumer(props: &KafkaProps, group: &str, offset_reset: &str) -> Arc<St
         ("statistics.interval.ms", "2000".to_string()),
     ]);
     let context = crate::observe::StatsContext { group: group.to_string() };
-    let consumer: StreamConsumer<crate::observe::StatsContext> = config.create_with_context(context).expect("build stream consumer");
+    let consumer: StreamConsumer<crate::observe::StatsContext> =
+        config.create_with_context(context).expect("build stream consumer");
     Arc::new(consumer)
 }
 
@@ -265,9 +270,8 @@ async fn partition_worker(
         let parent = crate::observe::extract_traceparent(&received.headers);
         span.set_parent(parent);
 
-        let (result, last_error) = run_with_retry(handler.as_ref(), &received, &group, &topic, &retry)
-            .instrument(span.clone())
-            .await;
+        let (result, last_error) =
+            run_with_retry(handler.as_ref(), &received, &group, &topic, &retry).instrument(span.clone()).await;
         span.record("result", if result.is_ok() { "success" } else { "error" });
 
         let mut commit = result.is_ok();
@@ -345,7 +349,12 @@ async fn run_with_retry(
 
 /// Commits the offset AFTER a given message's handler succeeded. `CommitMode::Async`
 /// enqueues the offset commit; librdkafka sends it asynchronously.
-fn commit_after_success(consumer: &StreamConsumer<crate::observe::StatsContext>, topic: &str, partition: i32, offset: i64) {
+fn commit_after_success(
+    consumer: &StreamConsumer<crate::observe::StatsContext>,
+    topic: &str,
+    partition: i32,
+    offset: i64,
+) {
     let mut tpl = rdkafka::TopicPartitionList::new();
     let result = tpl.add_partition(topic, partition).set_offset(rdkafka::Offset::Offset(offset + 1));
     if let Err(e) = result {

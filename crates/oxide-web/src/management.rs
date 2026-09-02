@@ -5,7 +5,7 @@
 //! main port.
 
 use crate::serve::HttpServing;
-use crate::{health, WebError};
+use crate::{WebError, health};
 use axum::{Json, Router};
 use oxide_core::{AppConfig, ComponentDescriptor, ComponentResult, Context};
 use std::net::SocketAddr;
@@ -64,8 +64,7 @@ fn validate_management_routes(routes: &[&ManagementRoute]) -> Result<(), WebErro
 }
 
 async fn info(config: oxide_core::Inject<AppConfig>) -> Json<serde_json::Value> {
-    let name: String =
-        config.get_opt("oxide.application.name").ok().flatten().unwrap_or_else(|| "oxide-app".into());
+    let name: String = config.get_opt("oxide.application.name").ok().flatten().unwrap_or_else(|| "oxide-app".into());
     Json(serde_json::json!({
         "application": {
             "name": name,
@@ -183,8 +182,7 @@ mod tests {
 
     #[test]
     fn management_props_deserialize_empty_uses_defaults() {
-        let props: ManagementProps =
-            serde_json::from_str("{}").expect("empty object should deserialize with defaults");
+        let props: ManagementProps = serde_json::from_str("{}").expect("empty object should deserialize with defaults");
         assert_eq!(props.port, 8081);
         assert!(props.enabled);
     }

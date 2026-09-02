@@ -62,21 +62,19 @@ async fn container() -> &'static ContainerRef {
             // reconnecting to the advertised broker) fail on the "connection
             // refused" path. This is the standard single-test-container setup.
             let build_image = || {
-                GenericImage::new("redpandadata/redpanda", "v24.2.1")
-                    .with_mapped_port(9092, 9092.tcp())
-                    .with_cmd([
-                        "redpanda",
-                        "start",
-                        "--mode",
-                        "dev-container",
-                        "--overprovisioned",
-                        "--smp",
-                        "1",
-                        "--memory",
-                        "1G",
-                        "--set",
-                        "redpanda.empty_seed_starts_cluster=true",
-                    ])
+                GenericImage::new("redpandadata/redpanda", "v24.2.1").with_mapped_port(9092, 9092.tcp()).with_cmd([
+                    "redpanda",
+                    "start",
+                    "--mode",
+                    "dev-container",
+                    "--overprovisioned",
+                    "--smp",
+                    "1",
+                    "--memory",
+                    "1G",
+                    "--set",
+                    "redpanda.empty_seed_starts_cluster=true",
+                ])
             };
             // Retry container start a few times: each test binary runs on the
             // pinned host port 9092, and a preceding binary's container may

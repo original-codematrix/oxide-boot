@@ -1,0 +1,4 @@
+# Closest match to the existing hand-written style (fewest diffs).
+max_width = 120
+use_small_heuristics = "Max"
+edition = "2024"

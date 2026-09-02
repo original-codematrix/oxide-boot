@@ -4,7 +4,7 @@
 //! see them.
 
 use oxide_boot::prelude::*;
-use oxide_boot::{component, ConfigProperties};
+use oxide_boot::{ConfigProperties, component};
 
 #[derive(ConfigProperties, serde::Deserialize)]
 #[config(prefix = "greeter")]

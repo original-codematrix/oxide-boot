@@ -20,7 +20,5 @@ pub fn derive_document(input: TokenStream) -> TokenStream {
 /// Turns a trait of repository method signatures into a Mongo repository.
 #[proc_macro_attribute]
 pub fn mongo_repository(args: TokenStream, item: TokenStream) -> TokenStream {
-    repository::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    repository::expand(args.into(), item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
 }

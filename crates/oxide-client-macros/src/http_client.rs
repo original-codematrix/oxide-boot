@@ -166,7 +166,10 @@ fn generate_method(sig: &syn::Signature, verb: &str, sub_path: &str, client_name
     for id in &path_ids {
         if !fmt_args.contains(id) {
             // path param not referenced in URL — treat as error
-            return Err(syn::Error::new_spanned(id, format!("path parameter `{id}` does not appear in the route path `{sub_path}`")));
+            return Err(syn::Error::new_spanned(
+                id,
+                format!("path parameter `{id}` does not appear in the route path `{sub_path}`"),
+            ));
         }
     }
     let fmt_lit = LitStr::new(&fmt_str, proc_macro2::Span::call_site());
@@ -247,9 +250,5 @@ fn returned_ok_type(out: &syn::ReturnType) -> Option<syn::Type> {
 }
 
 fn type_last(ty: &Type) -> Option<String> {
-    if let Type::Path(tp) = ty {
-        tp.path.segments.last().map(|s| s.ident.to_string())
-    } else {
-        None
-    }
+    if let Type::Path(tp) = ty { tp.path.segments.last().map(|s| s.ident.to_string()) } else { None }
 }

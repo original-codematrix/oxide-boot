@@ -57,14 +57,14 @@ extern "C" fn cleanup_container() {
 async fn ensure_uri() -> String {
     CONTAINER
         .get_or_init(|| async {
+            use testcontainers::ImageExt;
             use testcontainers::core::IntoContainerPort;
             use testcontainers::runners::AsyncRunner;
-            use testcontainers::ImageExt;
             let build = || {
                 // Note: `mongo:8` refuses to run on the CI/host Linux kernel (6.19+),
-// see mongodb SERVER-121912; `mongo:7` starts fine and exercises the same
-// repository surface.
-testcontainers::GenericImage::new("mongo", "7")
+                // see mongodb SERVER-121912; `mongo:7` starts fine and exercises the same
+                // repository surface.
+                testcontainers::GenericImage::new("mongo", "7")
                     .with_mapped_port(27017, 27017.tcp())
                     .with_cmd(["mongod", "--bind_ip_all"])
             };

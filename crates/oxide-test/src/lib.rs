@@ -18,10 +18,7 @@ pub struct TestApp;
 
 impl TestApp {
     pub fn builder() -> TestAppBuilder {
-        TestAppBuilder {
-            base_dir: PathBuf::from("."),
-            env: HashMap::new(),
-        }
+        TestAppBuilder { base_dir: PathBuf::from("."), env: HashMap::new() }
     }
 }
 

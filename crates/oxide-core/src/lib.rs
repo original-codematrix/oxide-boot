@@ -6,5 +6,5 @@ pub mod config;
 pub mod container;
 pub use config::{AppConfig, ConfigError};
 pub use container::{
-    assemble, ComponentDescriptor, ComponentResult, Context, ContextBuilder, ContextError, HookFn, Inject,
+    ComponentDescriptor, ComponentResult, Context, ContextBuilder, ContextError, HookFn, Inject, assemble,
 };

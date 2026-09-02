@@ -1,6 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse::Parser, Field, Fields, Ident, ItemStruct};
+use syn::{Field, Fields, Ident, ItemStruct, parse::Parser};
 
 pub struct ComponentArgs {
     pub post_construct: Option<Ident>,

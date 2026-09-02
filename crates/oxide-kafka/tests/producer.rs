@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tempfile::tempdir;
 
-use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::Message;
+use rdkafka::consumer::{BaseConsumer, Consumer};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct Note {
@@ -22,17 +22,10 @@ struct Note {
 /// Redpanda container, returning the running application.
 async fn boot_with_kafka_config() -> (tempfile::TempDir, oxide_boot::Application) {
     let dir = tempdir().expect("tempdir");
-    let yml = format!(
-        "oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n",
-        harness::bootstrap_servers().await
-    );
+    let yml = format!("oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n", harness::bootstrap_servers().await);
     std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
-    let app = OxideApplication::builder()
-        .base_dir(dir.path())
-        .env(HashMap::new())
-        .start()
-        .await
-        .expect("boot oxide app");
+    let app =
+        OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.expect("boot oxide app");
     (dir, app)
 }
 
@@ -60,13 +53,9 @@ fn read_all(topic: &str, props: &KafkaProps) -> Vec<(Vec<u8>, Option<Vec<u8>>)> 
 #[tokio::test(flavor = "multi_thread")]
 async fn harness_smoke_metadata_fetch_reaches_broker() {
     let props = harness::kafka_props().await;
-    let consumer: BaseConsumer = props
-        .client_config(&[])
-        .create()
-        .expect("create base consumer");
-    let meta = consumer
-        .fetch_metadata(None, std::time::Duration::from_secs(15))
-        .expect("metadata fetch against redpanda");
+    let consumer: BaseConsumer = props.client_config(&[]).create().expect("create base consumer");
+    let meta =
+        consumer.fetch_metadata(None, std::time::Duration::from_secs(15)).expect("metadata fetch against redpanda");
     // Broker must be present so we know the container actually serves Kafka.
     let brokers = meta.brokers();
     assert!(!brokers.is_empty(), "expected at least one broker, got none");

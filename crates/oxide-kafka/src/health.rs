@@ -8,8 +8,8 @@
 use crate::KafkaProps;
 use oxide_core::Context;
 use oxide_web::{HealthIndicator, HealthStatus, RegisteredCheck};
-use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::ClientConfig;
+use rdkafka::consumer::{BaseConsumer, Consumer};
 use std::time::Duration;
 
 /// The per-request budget for the metadata fetch (matches the health check

@@ -20,7 +20,7 @@ pub use oxide_client_macros::http_client;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::send;
-    pub use crate::{resolve_base_url, ClientError};
+    pub use crate::{ClientError, resolve_base_url};
     pub use inventory;
     pub use oxide_boot::__private::{AppConfig, ComponentDescriptor};
 }

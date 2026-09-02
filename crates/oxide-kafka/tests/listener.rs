@@ -85,10 +85,7 @@ async fn listener_delivers_partition_ordered_then_no_redelivery() {
     let producer = app1.context().get::<oxide_kafka::KafkaProducer>().expect("KafkaProducer registered");
 
     for seq in 0..5u32 {
-        producer
-            .send(LISTENER_TOPIC, "k1", &Payload { seq })
-            .await
-            .expect("produce message");
+        producer.send(LISTENER_TOPIC, "k1", &Payload { seq }).await.expect("produce message");
     }
 
     // Ordering proof: all 5 delivered in send order on the same partition.
@@ -114,9 +111,6 @@ async fn listener_delivers_partition_ordered_then_no_redelivery() {
     app2.stop().await.expect("second boot stops cleanly");
 
     let after = received().lock().expect("lock").len();
-    assert_eq!(
-        after, len_before_redelivery,
-        "no redelivery after a clean shutdown: commits must have been persisted"
-    );
+    assert_eq!(after, len_before_redelivery, "no redelivery after a clean shutdown: commits must have been persisted");
     assert_eq!(after, 5, "exactly the 5 original messages were seen in total");
 }

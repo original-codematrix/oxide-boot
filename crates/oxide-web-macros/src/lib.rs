@@ -9,7 +9,5 @@ use proc_macro::TokenStream;
 /// #[get]/#[post]/#[put]/#[delete]/#[patch] are mounted on the web server.
 #[proc_macro_attribute]
 pub fn controller(args: TokenStream, item: TokenStream) -> TokenStream {
-    controller::expand(args.into(), item.into())
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+    controller::expand(args.into(), item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
 }

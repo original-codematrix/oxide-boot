@@ -13,17 +13,13 @@ const ROUTE_ATTRS: [(&str, &str); 5] =
 pub fn join_paths(base: &str, path: &str) -> String {
     let joined = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
     let joined = joined.trim_end_matches('/').to_string();
-    if joined.is_empty() {
-        "/".to_string()
-    } else {
-        joined
-    }
+    if joined.is_empty() { "/".to_string() } else { joined }
 }
 
 pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let base_path = if args.is_empty() { String::new() } else { syn::parse2::<LitStr>(args)?.value() };
-    let mut item: ItemImpl = syn::parse2(item)
-        .map_err(|e| syn::Error::new(e.span(), "#[controller] must be applied to an impl block"))?;
+    let mut item: ItemImpl =
+        syn::parse2(item).map_err(|e| syn::Error::new(e.span(), "#[controller] must be applied to an impl block"))?;
 
     // Guard: reject generic impl blocks
     if !item.generics.params.is_empty() {
@@ -32,7 +28,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
     // Guard: reject trait impl blocks
     if let Some((_, trait_path, _)) = &item.trait_ {
-        return Err(syn::Error::new_spanned(trait_path, "#[controller] must be applied to an inherent impl, not a trait impl"));
+        return Err(syn::Error::new_spanned(
+            trait_path,
+            "#[controller] must be applied to an inherent impl, not a trait impl",
+        ));
     }
 
     let self_ty = item.self_ty.clone();
@@ -63,10 +62,8 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         // Route methods must take `&self` so `skip(1)` below is safe: without
         // this check a method missing `&self` (or taking `self`/`&mut self`)
         // would silently drop its first real parameter instead of erroring.
-        let is_shared_self_receiver = method
-            .sig
-            .receiver()
-            .is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
+        let is_shared_self_receiver =
+            method.sig.receiver().is_some_and(|r| r.reference.is_some() && r.mutability.is_none());
         if !is_shared_self_receiver {
             return Err(syn::Error::new_spanned(
                 &method.sig,

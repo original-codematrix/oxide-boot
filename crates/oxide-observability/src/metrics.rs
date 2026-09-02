@@ -13,8 +13,7 @@ static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 /// `histogram_quantile()`. Registering buckets here forces histogram
 /// rendering (`_bucket{le="..."}` series) so quantiles can be computed
 /// server-side across all scraped instances.
-const HTTP_SERVER_REQUESTS_SECONDS_BUCKETS: &[f64] =
-    &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
+const HTTP_SERVER_REQUESTS_SECONDS_BUCKETS: &[f64] = &[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
 
 /// Installs the process-global Prometheus recorder on first call; later calls
 /// (further boots in the same test binary) reuse the existing handle.

@@ -6,13 +6,25 @@ use std::path::Path;
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("cannot read config file {path}: {source}")]
-    Io { path: String, #[source] source: std::io::Error },
+    Io {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("invalid YAML in {path}: {source}")]
-    Parse { path: String, #[source] source: serde_yaml_ng::Error },
+    Parse {
+        path: String,
+        #[source]
+        source: serde_yaml_ng::Error,
+    },
     #[error("missing configuration key '{path}'")]
     Missing { path: String },
     #[error("configuration key '{path}' has an unexpected shape: {source}")]
-    Deserialize { path: String, #[source] source: serde_yaml_ng::Error },
+    Deserialize {
+        path: String,
+        #[source]
+        source: serde_yaml_ng::Error,
+    },
     #[error("unresolvable placeholder '${{{placeholder}}}' (no such key, no default)")]
     Placeholder { placeholder: String },
 }
@@ -81,17 +93,12 @@ impl AppConfig {
 
 /// Case-insensitive comparison key: lowercased, `-` and `_` stripped.
 fn normalize(key: &str) -> String {
-    key.chars()
-        .filter(|c| *c != '-' && *c != '_')
-        .collect::<String>()
-        .to_ascii_lowercase()
+    key.chars().filter(|c| *c != '-' && *c != '_').collect::<String>().to_ascii_lowercase()
 }
 
 fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
-    let mut matching: Vec<(&String, &String)> = env
-        .iter()
-        .filter(|(name, _)| name.starts_with("OXIDE_") && name.as_str() != "OXIDE_PROFILES_ACTIVE")
-        .collect();
+    let mut matching: Vec<(&String, &String)> =
+        env.iter().filter(|(name, _)| name.starts_with("OXIDE_") && name.as_str() != "OXIDE_PROFILES_ACTIVE").collect();
     matching.sort_by_key(|(name, _)| name.as_str());
     for (name, raw) in matching {
         let segments: Vec<String> = name.split('_').map(|s| s.to_ascii_lowercase()).collect();
@@ -129,10 +136,7 @@ fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
 
     for take in (1..=segments.len()).rev() {
         let candidate = normalize(&segments[..take].join(""));
-        let existing = map
-            .keys()
-            .find(|k| matches!(k, Value::String(s) if normalize(s) == candidate))
-            .cloned();
+        let existing = map.keys().find(|k| matches!(k, Value::String(s) if normalize(s) == candidate)).cloned();
         if let Some(key) = existing {
             if take == segments.len() {
                 map.insert(key, value);
@@ -177,10 +181,7 @@ fn set_existing(node: &mut Value, segments: &[String], value: Value, depth: usiz
 
     for take in (1..=segments.len()).rev() {
         let candidate = normalize(&segments[..take].join(""));
-        let existing = map
-            .keys()
-            .find(|k| matches!(k, Value::String(s) if normalize(s) == candidate))
-            .cloned();
+        let existing = map.keys().find(|k| matches!(k, Value::String(s) if normalize(s) == candidate)).cloned();
         if let Some(key) = existing {
             if take == segments.len() {
                 map.insert(key, value);
@@ -410,10 +411,7 @@ mod tests {
     #[test]
     fn non_oxide_env_vars_and_profiles_var_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        let env = HashMap::from([
-            ("PATH".into(), "/usr/bin".into()),
-            ("OXIDE_PROFILES_ACTIVE".into(), "prod".into()),
-        ]);
+        let env = HashMap::from([("PATH".into(), "/usr/bin".into()), ("OXIDE_PROFILES_ACTIVE".into(), "prod".into())]);
         let cfg = AppConfig::load(dir.path(), &env).unwrap();
         assert!(cfg.get_opt::<String>("path").unwrap().is_none());
         assert!(cfg.get_opt::<String>("oxide.profiles.active").unwrap().is_none());
@@ -439,8 +437,11 @@ mod tests {
     #[test]
     fn placeholder_resolves_against_other_key() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "application.yml",
-            "oxide:\n  application:\n    name: user-service\nkafka-group: \"${oxide.application.name}-group\"\n");
+        write(
+            dir.path(),
+            "application.yml",
+            "oxide:\n  application:\n    name: user-service\nkafka-group: \"${oxide.application.name}-group\"\n",
+        );
         let cfg = AppConfig::load(dir.path(), &HashMap::new()).unwrap();
         assert_eq!(cfg.get::<String>("kafka-group").unwrap(), "user-service-group");
     }
@@ -475,8 +476,7 @@ mod tests {
     #[test]
     fn framework_namespace_wins_over_stripped_binding() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "application.yml",
-            "oxide:\n  greeter:\n    name: framework\ngreeter:\n  name: app\n");
+        write(dir.path(), "application.yml", "oxide:\n  greeter:\n    name: framework\ngreeter:\n  name: app\n");
         let env = HashMap::from([("OXIDE_GREETER_NAME".into(), "X".into())]);
         let cfg = AppConfig::load(dir.path(), &env).unwrap();
         assert_eq!(cfg.get::<String>("oxide.greeter.name").unwrap(), "X");

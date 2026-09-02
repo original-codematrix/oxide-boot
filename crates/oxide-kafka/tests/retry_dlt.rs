@@ -11,9 +11,9 @@ mod harness;
 
 use oxide_boot::OxideApplication;
 use oxide_kafka::kafka_listeners;
+use rdkafka::Message;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Headers;
-use rdkafka::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,11 +43,7 @@ impl FlakyListener {
     #[kafka_listener(topic = "retry-flaky")]
     async fn on_event(&self, _payload: Payload) -> Result<(), String> {
         let n = FLAKY_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
-        if n < 2 {
-            Err("flaky failure".to_string())
-        } else {
-            Ok(())
-        }
+        if n < 2 { Err("flaky failure".to_string()) } else { Ok(()) }
     }
 }
 
@@ -123,12 +119,14 @@ async fn read_topic(topic: &str) -> Vec<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
     let mut out = Vec::new();
     while Instant::now() < deadline {
         if let Some(Ok(m)) = consumer.poll(Duration::from_secs(1)) {
-                let headers = m
-                    .headers()
-                    .map(|h| h.iter().map(|h| (h.key.to_string(), h.value.map(|v| v.to_vec()).unwrap_or_default())).collect())
-                    .unwrap_or_default();
-                out.push((m.payload().unwrap_or_default().to_vec(), headers));
-            }
+            let headers = m
+                .headers()
+                .map(|h| {
+                    h.iter().map(|h| (h.key.to_string(), h.value.map(|v| v.to_vec()).unwrap_or_default())).collect()
+                })
+                .unwrap_or_default();
+            out.push((m.payload().unwrap_or_default().to_vec(), headers));
+        }
     }
     out
 }
@@ -147,7 +145,11 @@ async fn retry_stops_after_success_and_skips_dlt() {
     // Wait until the count stabilizes (a successful commit should stop all
     // further processing) before asserting the exact value.
     assert!(
-        wait_until(|| FLAKY_ATTEMPTS.load(Ordering::SeqCst) >= 3 && is_stable(&FLAKY_ATTEMPTS, 1), Duration::from_secs(30)).await,
+        wait_until(
+            || FLAKY_ATTEMPTS.load(Ordering::SeqCst) >= 3 && is_stable(&FLAKY_ATTEMPTS, 1),
+            Duration::from_secs(30)
+        )
+        .await,
         "flaky listener should have been attempted 3 times, got {}",
         FLAKY_ATTEMPTS.load(Ordering::SeqCst)
     );
@@ -189,10 +191,8 @@ async fn permanent_failure_publishes_to_dlt_and_commits() {
     let (payload_bytes, headers) = &dlt[0];
     let body: Payload = serde_json::from_slice(payload_bytes).expect("payload preserved as JSON");
     assert_eq!(body, Payload { seq: 42 }, "payload identical in DLT");
-    let hmap: HashMap<String, String> = headers
-        .iter()
-        .map(|(k, v)| (k.to_ascii_lowercase(), String::from_utf8_lossy(v).to_string()))
-        .collect();
+    let hmap: HashMap<String, String> =
+        headers.iter().map(|(k, v)| (k.to_ascii_lowercase(), String::from_utf8_lossy(v).to_string())).collect();
     assert_eq!(hmap.get("x-exception-message").map(String::as_str), Some("always fails"));
     assert_eq!(hmap.get("x-original-topic").map(String::as_str), Some("retry-fail"));
     assert_eq!(hmap.get("x-original-partition").map(String::as_str), Some("0"));

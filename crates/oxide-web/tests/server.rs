@@ -1,9 +1,9 @@
+use axum::extract::{Json, Path};
+use oxide_boot::__private::ComponentDescriptor;
 use oxide_boot::prelude::*;
 use oxide_web::{
-    controller, ApiError, HealthIndicator, HealthStatus, ManagementServer, RouteDescriptor, WebError, WebServer,
+    ApiError, HealthIndicator, HealthStatus, ManagementServer, RouteDescriptor, WebError, WebServer, controller,
 };
-use oxide_boot::__private::ComponentDescriptor;
-use axum::extract::{Json, Path};
 use std::collections::HashMap;
 
 static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -37,11 +37,11 @@ async fn boots_serves_health_and_shuts_down() {
     assert_eq!(ready.status(), 200);
 
     app.stop().await.unwrap();
-    assert!(reqwest::get(format!("{base}/actuator/health")).await.is_err(), "management server must be down after stop");
     assert!(
-        reqwest::get(format!("http://{addr}/")).await.is_err(),
-        "main server must refuse connections after stop"
+        reqwest::get(format!("{base}/actuator/health")).await.is_err(),
+        "management server must be down after stop"
     );
+    assert!(reqwest::get(format!("http://{addr}/")).await.is_err(), "main server must refuse connections after stop");
     assert!(server.local_addr().is_none(), "local_addr must be None after pre_destroy tears down the server");
     assert!(mgmt_addr.port() != addr.port(), "management server must not share the main port");
 }
@@ -71,7 +71,9 @@ async fn actuator_lives_on_management_port_not_main_port() {
 }
 
 // Hand-written route descriptor test (macro-generated version comes in Task 6)
-struct EchoService { prefix: String }
+struct EchoService {
+    prefix: String,
+}
 
 inventory::submit! {
     ComponentDescriptor::builder(
@@ -194,8 +196,7 @@ async fn controller_macro_mounts_routes_and_returns_problem_json_on_error() {
         .unwrap();
     assert_eq!(created["text"], "hello");
 
-    let fetched: serde_json::Value =
-        client.get(format!("{base}/1")).send().await.unwrap().json().await.unwrap();
+    let fetched: serde_json::Value = client.get(format!("{base}/1")).send().await.unwrap().json().await.unwrap();
     assert_eq!(fetched["id"], 1);
 
     let missing = client.get(format!("{base}/999")).send().await.unwrap();

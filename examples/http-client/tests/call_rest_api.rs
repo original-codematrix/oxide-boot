@@ -3,12 +3,12 @@
 //! `NotesClient` — GET list, GET by id, POST create, and a 404 via the typed
 //! `ClientError`.
 
+use axum::Router;
 use axum::extract::{Json as AxumJson, Path as AxumPath};
 use axum::http::StatusCode;
 use axum::routing::get as aget;
-use axum::Router;
 use http_client::Note;
-use oxide_client::{http_client, Json, Path};
+use oxide_client::{Json, Path, http_client};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Mutex;
@@ -27,7 +27,14 @@ async fn list_notes() -> axum::Json<Vec<Stored>> {
     axum::Json(STORE.lock().unwrap().clone())
 }
 async fn get_note(id: AxumPath<u32>) -> std::result::Result<axum::Json<Stored>, (StatusCode, &'static str)> {
-    STORE.lock().unwrap().iter().find(|n| n.id == *id).cloned().map(axum::Json).ok_or((StatusCode::NOT_FOUND, "not found"))
+    STORE
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|n| n.id == *id)
+        .cloned()
+        .map(axum::Json)
+        .ok_or((StatusCode::NOT_FOUND, "not found"))
 }
 async fn create_note(AxumJson(body): AxumJson<Stored>) -> axum::Json<Stored> {
     STORE.lock().unwrap().push(body.clone());
@@ -50,9 +57,8 @@ trait NotesClient {
 async fn http_client_hits_real_server() {
     STORE.lock().unwrap().clear();
 
-    let app = Router::new()
-        .route("/api/notes", aget(list_notes).post(create_note))
-        .route("/api/notes/{id}", aget(get_note));
+    let app =
+        Router::new().route("/api/notes", aget(list_notes).post(create_note)).route("/api/notes/{id}", aget(get_note));
     let addr: SocketAddr = "127.0.0.1:18080".parse().unwrap();
     tokio::spawn(async move {
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

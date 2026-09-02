@@ -11,9 +11,9 @@
 #[path = "harness/mod.rs"]
 mod harness;
 
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use oxide_boot::OxideApplication;
 use oxide_kafka::kafka_listeners;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -48,12 +48,8 @@ async fn boot(group: &str) -> (tempfile::TempDir, oxide_boot::Application) {
         harness::bootstrap_servers().await
     );
     std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
-    let app = OxideApplication::builder()
-        .base_dir(dir.path())
-        .env(HashMap::new())
-        .start()
-        .await
-        .expect("boot with tracing");
+    let app =
+        OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.expect("boot with tracing");
     (dir, app)
 }
 
@@ -118,14 +114,12 @@ fn producer_consumer_trace_chain_and_consumer_lag() {
 
         // --- Trace chain ---
         let spans = exporter.get_finished_spans().expect("finished spans");
-        let send = spans
-            .iter()
-            .find(|s| s.name == "kafka.send")
-            .unwrap_or_else(|| panic!("expected a kafka.send span, saw: {:?}", spans.iter().map(|s| &s.name).collect::<Vec<_>>()));
-        let process = spans
-            .iter()
-            .find(|s| s.name == "kafka.process")
-            .unwrap_or_else(|| panic!("expected a kafka.process span, saw: {:?}", spans.iter().map(|s| &s.name).collect::<Vec<_>>()));
+        let send = spans.iter().find(|s| s.name == "kafka.send").unwrap_or_else(|| {
+            panic!("expected a kafka.send span, saw: {:?}", spans.iter().map(|s| &s.name).collect::<Vec<_>>())
+        });
+        let process = spans.iter().find(|s| s.name == "kafka.process").unwrap_or_else(|| {
+            panic!("expected a kafka.process span, saw: {:?}", spans.iter().map(|s| &s.name).collect::<Vec<_>>())
+        });
         assert_eq!(
             send.span_context.trace_id(),
             process.span_context.trace_id(),

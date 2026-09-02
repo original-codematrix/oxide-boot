@@ -5,9 +5,9 @@
 //! After the attempts are exhausted the record is either published to the
 //! dead-letter topic (`<topic>.DLT`, if `dlt-enabled`) or logged and committed.
 
+use crate::ReceivedMessage;
 use crate::config::RetryProps;
 use crate::producer::KafkaProducer;
-use crate::ReceivedMessage;
 use rdkafka::message::{Header, OwnedHeaders};
 use std::time::Duration;
 
@@ -37,22 +37,10 @@ pub async fn publish_to_dlt(
 ) -> Result<(), crate::KafkaError> {
     let dlt_topic = format!("{}.DLT", msg.topic);
     let mut headers = OwnedHeaders::new()
-        .insert(Header {
-            key: HEADER_EXCEPTION_MESSAGE,
-            value: Some(last_error.as_bytes()),
-        })
-        .insert(Header {
-            key: HEADER_ORIGINAL_TOPIC,
-            value: Some(msg.topic.as_bytes()),
-        })
-        .insert(Header {
-            key: HEADER_ORIGINAL_PARTITION,
-            value: Some(msg.partition.to_string().as_bytes()),
-        })
-        .insert(Header {
-            key: HEADER_ORIGINAL_OFFSET,
-            value: Some(msg.offset.to_string().as_bytes()),
-        });
+        .insert(Header { key: HEADER_EXCEPTION_MESSAGE, value: Some(last_error.as_bytes()) })
+        .insert(Header { key: HEADER_ORIGINAL_TOPIC, value: Some(msg.topic.as_bytes()) })
+        .insert(Header { key: HEADER_ORIGINAL_PARTITION, value: Some(msg.partition.to_string().as_bytes()) })
+        .insert(Header { key: HEADER_ORIGINAL_OFFSET, value: Some(msg.offset.to_string().as_bytes()) });
     // Preserve any other headers the original record carried (e.g. traceparent).
     for (k, v) in &msg.headers {
         headers = headers.insert(Header { key: k.as_str(), value: Some(v.as_slice()) });
@@ -66,7 +54,8 @@ mod tests {
 
     #[test]
     fn backoff_sequence_sizes_and_values() {
-        let props = RetryProps { max_attempts: 3, backoff_initial_ms: 100, backoff_multiplier: 2.0, ..Default::default() };
+        let props =
+            RetryProps { max_attempts: 3, backoff_initial_ms: 100, backoff_multiplier: 2.0, ..Default::default() };
         let backoffs: Vec<Duration> = backoff_sequence(&props).collect();
         // 2 entries (attempts 2 and 3), 100ms and 200ms.
         assert_eq!(backoffs.len(), 2);

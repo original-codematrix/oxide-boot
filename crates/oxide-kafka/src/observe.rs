@@ -7,8 +7,8 @@
 //! `oxide-observability`); without a global propagator set, injection and
 //! extraction are no-ops.
 
-use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::Context;
+use opentelemetry::propagation::{Extractor, Injector};
 
 /// A mutable `(name, value)` header list usable as an `Injector`/`Extractor`
 /// for the OpenTelemetry `TextMapPropagator` API.
@@ -109,10 +109,8 @@ mod tests {
         inject_traceparent(&cx, &mut headers);
 
         // The carrier must now contain a `traceparent` header.
-        let traceparent = headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("traceparent"))
-            .expect("traceparent header injected");
+        let traceparent =
+            headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("traceparent")).expect("traceparent header injected");
         let value = std::str::from_utf8(&traceparent.1).expect("utf8");
         // Format: 00-<32 hex trace-id>-<16 hex span-id>-<2 flags>
         let parts: Vec<&str> = value.split('-').collect();
