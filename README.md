@@ -276,6 +276,51 @@ context). `oxide-observability` metrics/spans fire per Mongo command, and
 | `@Query("{...}")` with `?0` | `#[query(filter = r#"{... ?1 ...}"#)]` (1-based placeholders) |
 | `spring.data.mongodb.uri` | `oxide.mongo.uri` |
 
+## HTTP client (oxide-client)
+
+Declarative, FeignClient-style HTTP clients: annotate a `trait` and the macro
+generates a reqwest-backed client registered as an injectable component.
+
+```rust
+use oxide_client::{http_client, Json, Path};
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Invoice { id: u32 }
+
+#[http_client(base_url = "${oxide.clients.billing.url}")]
+trait BillingClient {
+    #[get("/invoices/{id}")]
+    async fn get_invoice(&self, id: Path<u32>) -> Result<Invoice, oxide_client::ClientError>;
+
+    #[post("/invoices")]
+    async fn create(&self, body: Json<CreateInput>) -> Result<Invoice, oxide_client::ClientError>;
+}
+```
+
+The client name is derived from the trait (`billing`), so the `${…}` placeholder
+resolves from `oxide.clients.billing.url`. Each call:
+- injects the W3C `traceparent` from the current span (traces flow through
+  service calls),
+- records an `http_client_requests_seconds{client, method, status, uri}`
+  histogram,
+- maps non-2xx responses to a typed `ClientError::Http { status, body }`
+  (RFC 7807 bodies left in `body`).
+
+Run the example end-to-end:
+```sh
+cargo run -p rest-api            # serves /api/notes on :8080
+cargo test -p http-client        # boots an in-process server and calls the client
+```
+
+| Spring | Oxide Boot |
+|---|---|
+| `@FeignClient(name = "billing", url = "${...}")` | `#[http_client(base_url = "${...}")]` on a `trait` |
+| `@GetMapping("/x/{id}")` | `#[get("/x/{id}")]` |
+| `@PathVariable String id` | `id: Path<String>` |
+| `@RequestBody X body` | `body: Json<X>` |
+| `FeignException` / `ResponseEntity` | `ClientError::Http { status, body }` |
+| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (and per-client timeout/retry props) |
+
 ## Environment overrides
 
 An env var `OXIDE_A_B` binds in this order: (1) an existing key under

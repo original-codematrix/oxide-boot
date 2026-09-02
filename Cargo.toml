@@ -11,8 +11,11 @@ members = [
     "crates/oxide-kafka-macros",
     "crates/oxide-mongo",
     "crates/oxide-mongo-macros",
+    "crates/oxide-client",
+    "crates/oxide-client-macros",
     "examples/hello-world",
     "examples/rest-api",
+    "examples/http-client",
     "examples/kafka",
 ]
 
@@ -33,6 +36,8 @@ oxide-kafka = { path = "crates/oxide-kafka" }
 oxide-kafka-macros = { path = "crates/oxide-kafka-macros" }
 oxide-mongo = { path = "crates/oxide-mongo" }
 oxide-mongo-macros = { path = "crates/oxide-mongo-macros" }
+oxide-client = { path = "crates/oxide-client" }
+oxide-client-macros = { path = "crates/oxide-client-macros" }
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
 testcontainers = "0.23"
 axum = "0.8"
