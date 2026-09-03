@@ -34,7 +34,11 @@ pub(crate) async fn observe(req: axum::extract::Request, next: axum::middleware:
         http.status_code = tracing::field::Empty,
     );
     let parent = opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&HeaderCarrier(req.headers())));
-    span.set_parent(parent);
+    // `set_parent` (tracing-opentelemetry 0.33+) returns a `Result`,
+    // failing only if the otel layer isn't registered, the span was
+    // already started, or the span is filtered out — none of which should
+    // abort request handling, so the error is discarded.
+    let _ = span.set_parent(parent);
 
     let started = std::time::Instant::now();
     // `next.run` drives the rest of the middleware stack and the handler

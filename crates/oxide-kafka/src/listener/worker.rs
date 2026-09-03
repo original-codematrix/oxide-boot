@@ -64,7 +64,11 @@ pub(super) async fn partition_worker(
             result = tracing::field::Empty,
         );
         let parent = crate::observe::extract_traceparent(&received.headers);
-        span.set_parent(parent);
+        // `set_parent` (tracing-opentelemetry 0.33+) returns a `Result`,
+        // failing only if the otel layer isn't registered, the span was
+        // already started, or the span is filtered out — none of which
+        // should abort message processing, so the error is discarded.
+        let _ = span.set_parent(parent);
 
         let (result, last_error) =
             run_with_retry(handler.as_ref(), &received, &group, &topic, &retry).instrument(span.clone()).await;

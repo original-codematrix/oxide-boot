@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use opentelemetry::trace::{Tracer as _, TracerProvider as _};
     use opentelemetry_sdk::propagation::TraceContextPropagator;
-    use opentelemetry_sdk::trace::{Sampler, TracerProvider};
+    use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 
     /// Proves that `inject_traceparent`, given a real span context and the W3C
     /// propagator installed, writes a well-formed `traceparent` header — this
@@ -72,7 +72,7 @@ mod tests {
         // Install a W3C propagator (as `oxide-observability` does on boot) and a
         // real tracer provider so a span carries a genuine trace id.
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
-        let provider = TracerProvider::builder().with_sampler(Sampler::AlwaysOn).build();
+        let provider = SdkTracerProvider::builder().with_sampler(Sampler::AlwaysOn).build();
         let tracer = provider.tracer("observe-test");
 
         let span = tracer.start("unit-span");

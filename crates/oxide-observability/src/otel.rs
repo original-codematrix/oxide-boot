@@ -26,12 +26,12 @@
 //! this process wins" pattern as `metrics::prometheus_handle` and the
 //! `try_init` calls in `logging.rs`.
 
+use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, Tracer, TracerProvider};
-use opentelemetry_sdk::{Resource, runtime};
+use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider, Tracer};
 use oxide_core::AppConfig;
 use std::sync::OnceLock;
 
@@ -81,7 +81,7 @@ impl Default for OtelProps {
 /// The process-global tracer provider, set at most once. `OtelLifecycle`
 /// reads this on shutdown; `None` means nothing was ever installed (no
 /// `endpoint` configured) and shutdown is a no-op.
-static PROVIDER: OnceLock<TracerProvider> = OnceLock::new();
+static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
 /// Concrete type of the layer `logging.rs` stacks onto its
 /// `tracing_subscriber::registry()` — pinned to `Registry` since that's the
@@ -122,35 +122,43 @@ pub(crate) fn build_layer(config: &AppConfig) -> Result<Option<OtelLayer>, Box<d
 }
 
 /// Assembles a `TracerProvider` from any `SpanExporter` (real OTLP or the
-/// in-memory test exporter share this) via a batch processor on the Tokio
-/// runtime, the `service.name` resource, and parent-based ratio sampling.
-fn build_provider<E>(exporter: E, service_name: String, sample_ratio: f64) -> TracerProvider
+/// in-memory test exporter share this) via a batch processor — its own
+/// dedicated background thread as of `opentelemetry_sdk` 0.32, no longer a
+/// Tokio-runtime task — the `service.name` resource, and parent-based ratio
+/// sampling.
+fn build_provider<E>(exporter: E, service_name: String, sample_ratio: f64) -> SdkTracerProvider
 where
-    E: opentelemetry_sdk::export::trace::SpanExporter + 'static,
+    E: opentelemetry_sdk::trace::SpanExporter + 'static,
 {
-    TracerProvider::builder()
-        .with_span_processor(BatchSpanProcessor::builder(exporter, runtime::Tokio).build())
+    SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(sample_ratio))))
-        .with_resource(Resource::new(vec![KeyValue::new("service.name", service_name)]))
+        .with_resource(Resource::builder().with_service_name(service_name).build())
         .build()
 }
 
 /// Registers `provider` as the process-global tracer provider and parks it
 /// in `PROVIDER` for `OtelLifecycle` to shut down later, then hands back the
 /// `tracing-opentelemetry` layer wrapping it.
-fn install(provider: TracerProvider) -> OtelLayer {
-    let _ = global::set_tracer_provider(provider.clone());
+fn install(provider: SdkTracerProvider) -> OtelLayer {
+    global::set_tracer_provider(provider.clone());
     let _ = PROVIDER.set(provider.clone());
     layer_from(provider)
 }
 
-fn layer_from(provider: TracerProvider) -> OtelLayer {
+fn layer_from(provider: SdkTracerProvider) -> OtelLayer {
     let tracer = provider.tracer("oxide-observability");
     tracing_opentelemetry::layer().with_tracer(tracer)
 }
 
 /// Shuts down (and thereby batch-flushes) the process-global tracer
 /// provider. No-op when nothing was ever installed.
+///
+/// `SdkTracerProvider::shutdown` (0.32+) returns `OTelSdkResult` —
+/// `Result<(), OTelSdkError>` — rather than the old SDK-specific error type,
+/// but the call remains synchronous/blocking exactly as before, which is
+/// why it still needs to run inside [`run_detached_with_timeout`] rather
+/// than being awaited directly.
 pub(crate) fn shutdown() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if let Some(provider) = PROVIDER.get() {
         provider.shutdown().map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
@@ -267,33 +275,33 @@ impl OtelLifecycle {
 #[doc(hidden)]
 pub mod testing {
     use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::export::trace::{ExportResult, SpanData, SpanExporter};
-    use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::error::OTelSdkResult;
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SpanData, SpanExporter};
 
     /// Wraps `InMemorySpanExporter` to swallow `shutdown()`.
     ///
-    /// `InMemorySpanExporter::shutdown` is implemented as `reset()` — it
-    /// clears the buffer. `BatchSpanProcessor`'s own shutdown handshake does
-    /// exactly the right thing for a real exporter (flush pending spans,
-    /// *then* tell the exporter to release its resources), but that same
-    /// sequence, run against the real `InMemorySpanExporter`, flushes the
-    /// spans in and then immediately wipes them via that trailing `shutdown`
-    /// call — nothing would ever be left to read afterwards. This wrapper
-    /// keeps `export`/`set_resource` real and makes `shutdown` a no-op, so
-    /// `OtelLifecycle::flush` can exercise the *real* flush-on-shutdown path
-    /// end to end and still leave the spans in place for the test to read.
+    /// `InMemorySpanExporter::shutdown` clears the buffer (its
+    /// `should_reset_on_shutdown` default). `BatchSpanProcessor`'s own
+    /// shutdown handshake does exactly the right thing for a real exporter
+    /// (flush pending spans, *then* tell the exporter to release its
+    /// resources), but that same sequence, run against the real
+    /// `InMemorySpanExporter`, flushes the spans in and then immediately
+    /// wipes them via that trailing `shutdown` call — nothing would ever be
+    /// left to read afterwards. This wrapper keeps `export`/`set_resource`
+    /// real and makes `shutdown` a no-op, so `OtelLifecycle::flush` can
+    /// exercise the *real* flush-on-shutdown path end to end and still leave
+    /// the spans in place for the test to read.
     #[derive(Clone, Debug)]
     struct KeepFinishedSpans(InMemorySpanExporter);
 
-    type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
-
     impl SpanExporter for KeepFinishedSpans {
-        fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
-            self.0.export(batch)
+        async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+            self.0.export(batch).await
         }
 
-        fn shutdown(&mut self) {
+        fn shutdown(&self) -> OTelSdkResult {
             // Deliberately not forwarded — see the type doc comment.
+            Ok(())
         }
 
         fn set_resource(&mut self, resource: &Resource) {
@@ -329,39 +337,35 @@ pub mod testing {
     }
 
     /// Wraps `InMemorySpanExporter` but makes `export()` hang for `delay`
-    /// via a real `tokio::time::sleep` before forwarding — standing in for a
-    /// hung/unreachable OTLP collector's network response, i.e. an
-    /// unbounded `.await` deep inside `BatchSpanProcessor`'s own background
-    /// task, not a synchronous blocking call.
+    /// before forwarding — standing in for a hung/unreachable OTLP
+    /// collector's network response.
     ///
-    /// This is deliberately an async hang (`tokio::time::sleep`), not a
-    /// synchronous one (`std::thread::sleep`): a synchronous hang blocks
-    /// whichever worker thread happens to be running that task's poll,
-    /// which `Runtime::drop` must then wait to reclaim regardless of what
-    /// `OtelLifecycle::flush` does — that would conflate a limitation of a
-    /// misbehaving exporter with what this module is responsible for. An
-    /// async hang instead genuinely suspends at an `.await` point, which is
-    /// what a real stalled network call looks like, and it's the case
-    /// `OtelLifecycle::flush`'s timeout is actually meant to bound: the
-    /// `BatchSpanProcessor` background task's `flush()` never completes, so
-    /// it never replies on the response channel `TracerProvider::shutdown`
-    /// blocks on — exactly the wait `tests/otel_shutdown_timeout.rs` proves
-    /// gets cut short instead of delaying either `stop()` or process exit.
+    /// As of `opentelemetry_sdk` 0.32, `BatchSpanProcessor` no longer spawns
+    /// its export work as a task on the caller's async runtime
+    /// (`runtime::Tokio` is gone from the non-experimental API); it runs its
+    /// own dedicated `std::thread::spawn` background thread and drives each
+    /// `SpanExporter::export` future with a bare `futures_executor::block_on`
+    /// — no I/O reactor, no timer. That is *exactly* the shape
+    /// `run_detached_with_timeout` uses for `OtelLifecycle::flush` itself,
+    /// which is what makes this hang realistic again: a `tokio::time::sleep`
+    /// here would panic ("no reactor running") since that thread carries no
+    /// Tokio context, so the hang has to be `std::thread::sleep` — which is
+    /// now the *correct* simulation, not a compromise, because this closure
+    /// runs on the SDK's own detached thread rather than a Tokio worker.
+    /// Blocking it doesn't delay `Runtime::drop`; it's precisely the
+    /// "unresponsive collector" case `OtelLifecycle::flush`'s timeout exists
+    /// to bound, proven end to end by `tests/otel_shutdown_timeout.rs`.
     #[derive(Clone, Debug)]
     struct HungExport(InMemorySpanExporter, std::time::Duration);
 
     impl SpanExporter for HungExport {
-        fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
-            let delay = self.1;
-            let inner = self.0.export(batch);
-            Box::pin(async move {
-                tokio::time::sleep(delay).await;
-                inner.await
-            })
+        async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+            std::thread::sleep(self.1);
+            self.0.export(batch).await
         }
 
-        fn shutdown(&mut self) {
-            self.0.shutdown();
+        fn shutdown(&self) -> OTelSdkResult {
+            self.0.shutdown()
         }
 
         fn set_resource(&mut self, resource: &Resource) {
@@ -371,9 +375,7 @@ pub mod testing {
 
     /// Installs a tracer provider whose exporter's `export()` hangs for
     /// `delay` before returning, simulating a hung/unreachable OTLP
-    /// collector. Call this from inside a running Tokio runtime (needed by
-    /// `BatchSpanProcessor::new`'s `runtime::Tokio` integration), before
-    /// booting the app — same as [`install_in_memory`].
+    /// collector — same as [`install_in_memory`].
     pub fn install_in_memory_with_hung_export(delay: std::time::Duration) -> InMemorySpanExporter {
         let exporter = InMemorySpanExporter::default();
         let provider = super::build_provider(HungExport(exporter.clone(), delay), "otel-test".into(), 1.0);

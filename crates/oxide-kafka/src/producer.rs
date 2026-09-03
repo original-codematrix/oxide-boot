@@ -94,7 +94,9 @@ impl KafkaProducer {
         let result = self.producer.send(record, Timeout::After(self.send_timeout)).instrument(span).await;
 
         let outcome = match result {
-            Ok((partition, offset)) => Ok(Delivery { partition, offset }),
+            Ok(rdkafka::producer::future_producer::Delivery { partition, offset, .. }) => {
+                Ok(Delivery { partition, offset })
+            }
             Err((e, _msg)) => Err(KafkaError::Send { topic: topic.to_string(), source: e }),
         };
 
