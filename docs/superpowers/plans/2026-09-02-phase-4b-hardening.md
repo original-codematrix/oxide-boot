@@ -714,6 +714,18 @@ Claude-Session: https://claude.ai/code/session_01KCbCYDWYust7oN81JcesaE"
 
 ---
 
+### Task 13b: Dokumentierte kebab-case-Keys binden wirklich (eingeschoben 2026-09-03)
+
+Aus dem Review von Task 12 hervorgegangen und vom Controller verifiziert: sechs im README
+dokumentierte Properties tragen keinen serde-Rename und binden deshalb nie —
+`max-attempts`, `backoff-initial-ms`, `backoff-multiplier`, `dlt-enabled`, `auto-offset-reset`
+und `ping-on-start`. Gesetzte Werte werden still verworfen. Behoben mit
+`#[serde(rename_all = "kebab-case")]` auf den betroffenen Structs plus je einem Test, der den
+dokumentierten Schlüssel mit einem vom Default abweichenden Wert bindet. Vollständiger Task-Text:
+`.superpowers/sdd/2026-09-02-phase-4b-hardening/task-13b-brief.md`.
+
+---
+
 ### Task 14: Poison Pill und Backoff
 
 **Files:**
