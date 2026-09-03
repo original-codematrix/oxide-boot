@@ -13,6 +13,13 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
+// Only a placeholder for the `#[http_client]` attribute, which needs a literal
+// at compile time. Both tests below bind port 0 and override `__base_url` with
+// the address the OS actually handed out -- a fixed port here would collide
+// with anything else on the machine (another test binary, the load-test stack
+// in `deploy/`), and the failure mode is nasty: the bind happens inside a
+// spawned task, so its panic is swallowed and the test silently talks to
+// whatever else already owns the port.
 const BASE: &str = "http://localhost:18080";
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
@@ -89,15 +96,16 @@ async fn http_client_hits_real_server() {
 
     let app =
         Router::new().route("/api/notes", aget(list_notes).post(create_note)).route("/api/notes/{id}", aget(get_note));
-    let addr: SocketAddr = "127.0.0.1:18080".parse().unwrap();
+    // Bind here rather than inside the task: this way a bind failure fails the
+    // test, and the port is already listening before the first request.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     });
-    // Give the server a moment to bind.
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let client = NotesClient { __client: reqwest::Client::new(), __base_url: BASE.to_string() };
+    let client = NotesClient { __client: reqwest::Client::new(), __base_url: format!("http://{addr}") };
+    let _ = BASE;
 
     // POST create.
     let created = client.create(Json(Note { id: 7, text: "first".into() })).await.expect("create");
@@ -129,14 +137,15 @@ async fn path_injection_cannot_escape_the_route() {
     STORE2.lock().unwrap().push(Stored { id: 7, text: "first".into() });
 
     let app = Router::new().route("/api/notes", aget(list_notes2)).route("/api/notes/{id}", aget(get_note2));
-    let addr: SocketAddr = "127.0.0.1:18081".parse().unwrap();
+    // Same as above: bind here so a failure surfaces, and take the port the OS
+    // assigns instead of claiming a fixed one.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind test server");
+    let addr: SocketAddr = listener.local_addr().expect("local_addr");
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         axum::serve(listener, app).await.unwrap();
     });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let client = NotesClient { __client: reqwest::Client::new(), __base_url: "http://localhost:18081".to_string() };
+    let client = NotesClient { __client: reqwest::Client::new(), __base_url: format!("http://{addr}") };
 
     let escaped = client.get_raw(Path("../notes".to_string())).await.expect_err("must not reach the list route");
     assert_eq!(escaped.status().map(|s| s.as_u16()), Some(404));

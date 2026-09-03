@@ -148,14 +148,24 @@ impl NoteService {
         match self.cache.get_json::<Note>(&Self::cache_key(id)).await {
             Ok(Some(note)) => {
                 metrics::counter!("showcase_cache_total", "result" => "hit").increment(1);
-                let _ = self.cache.increment("stats:cache-hits", 1).await;
+                // Off the request path: this counter is telemetry, and making
+                // the cache *hit* -- the fast path the cache exists for --
+                // wait a round trip for it defeats the point.
+                let counter = self.cache.clone();
+                tokio::spawn(async move {
+                    let _ = counter.increment("stats:cache-hits", 1).await;
+                });
                 return Ok(Some(note));
             }
             Ok(None) => {}
             Err(e) => tracing::warn!(error = %e, id, "cache read failed; falling through to mongo"),
         }
         metrics::counter!("showcase_cache_total", "result" => "miss").increment(1);
-        let _ = self.cache.increment("stats:cache-misses", 1).await;
+        // Same reasoning as the hit path above.
+        let counter = self.cache.clone();
+        tokio::spawn(async move {
+            let _ = counter.increment("stats:cache-misses", 1).await;
+        });
 
         let note = self.repo.find_by_id(id.to_string()).await.map_err(|e| {
             tracing::error!(error = %e, id, "mongo read failed");
@@ -270,17 +280,20 @@ pub struct StatsController {
 impl StatsController {
     #[get("")]
     async fn stats(&self) -> Result<Json<Stats>, ApiError> {
+        // One MGET instead of three sequential `get` calls. Those three round
+        // trips were the entire cost of this handler; against a containerised
+        // Redis they are worth more than everything else it does.
+        let keys = ["stats:events-consumed", "stats:cache-hits", "stats:cache-misses"];
+        let values = self.cache.get_many(&keys).await.unwrap_or_else(|e| {
+            // Redis being down must not fail a statistics endpoint: report
+            // zeroes, exactly as for a key that was never written.
+            tracing::warn!(error = %e, "stats read failed");
+            vec![None; keys.len()]
+        });
         // A missing counter means "nothing has happened yet", which is zero,
         // not an error -- so an unseeded Redis still answers this endpoint.
-        let read = |key: &'static str| {
-            let cache = self.cache.clone();
-            async move { cache.get(key).await.ok().flatten().and_then(|v| v.parse::<i64>().ok()).unwrap_or(0) }
-        };
-        Ok(Json(Stats {
-            events_consumed: read("stats:events-consumed").await,
-            cache_hits: read("stats:cache-hits").await,
-            cache_misses: read("stats:cache-misses").await,
-        }))
+        let n = |i: usize| values.get(i).and_then(|v| v.as_deref()).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        Ok(Json(Stats { events_consumed: n(0), cache_hits: n(1), cache_misses: n(2) }))
     }
 }
 

@@ -150,3 +150,49 @@ async fn health_endpoint_reports_redis_up() {
 
     app.stop().await.expect("stop");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_many_is_positional_and_tolerates_gaps() {
+    let (_app, t) = boot("t8:").await;
+    t.set("a", "1", None).await.unwrap();
+    t.set("c", "3", None).await.unwrap();
+    // "b" is deliberately absent: the result must keep the caller's ordering
+    // and mark the gap, not compact it away.
+    let got = t.get_many(&["a", "b", "c"]).await.unwrap();
+    assert_eq!(got, vec![Some("1".to_string()), None, Some("3".to_string())]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_many_applies_the_key_prefix() {
+    let (_app, t) = boot("t9:").await;
+    t.set("prefixed", "yes", None).await.unwrap();
+    assert_eq!(t.get_many(&["prefixed"]).await.unwrap(), vec![Some("yes".to_string())]);
+    // Reading the same name through a differently prefixed template must miss.
+    let (_app2, other) = boot("t9-other:").await;
+    assert_eq!(other.get_many(&["prefixed"]).await.unwrap(), vec![None]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn get_many_with_no_keys_does_not_hit_the_server() {
+    let (_app, t) = boot("t10:").await;
+    // MGET with no arguments is a protocol error, so this must be answered
+    // locally rather than sent.
+    assert_eq!(t.get_many(&[]).await.unwrap(), Vec::<Option<String>>::new());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pipeline_applies_every_command() {
+    let (_app, t) = boot("t11:").await;
+    t.delete("counter").await.unwrap();
+    // The closure gets redis-rs's builder, which does *not* apply the
+    // template's prefix -- hence `t.key(...)` on each key.
+    t.pipeline(|pipe| {
+        pipe.cmd("SET").arg(t.key("one")).arg("1").ignore();
+        pipe.cmd("INCRBY").arg(t.key("counter")).arg(5).ignore();
+        pipe.cmd("INCRBY").arg(t.key("counter")).arg(2).ignore();
+    })
+    .await
+    .unwrap();
+    assert_eq!(t.get("one").await.unwrap().as_deref(), Some("1"));
+    assert_eq!(t.get("counter").await.unwrap().as_deref(), Some("7"));
+}

@@ -114,9 +114,12 @@ services:
       OXIDE_LOGGING_LEVEL_ROOT: "warn"
     ports:
       # Only the HTTP surface is published, so k6 on the host still drives it.
-      # That one crossing is unavoidable without running k6 in here too.
-      - "8080:8080"
-      - "8081:8081"
+      # That one crossing is unavoidable unless k6 runs in here too
+      # (K6_IN_NETWORK=1). Published on 18080/18081, not the framework
+      # defaults: the test suite boots apps that bind 8080/8081, and a running
+      # stack would make `cargo test` fail with "address already in use".
+      - "18080:8080"
+      - "18081:8081"
     depends_on:
       redpanda:
         condition: service_healthy

@@ -40,7 +40,11 @@ async fn producer_publishes_and_listener_consumes() {
     std::fs::write(
         dir.join("application.yml"),
         format!(
-            "oxide:\n  application:\n    name: kafka-example-test\n  kafka:\n    bootstrap-servers: \"{}\"\n",
+            // Port 0 on both servers. The defaults (8080/8081) are bound by
+            // anything else running locally -- another test binary, or the
+            // load-test stack in `deploy/` -- and this test does not use the
+            // HTTP surface at all, so there is nothing to gain by claiming them.
+            "oxide:\n  application:\n    name: kafka-example-test\n  server:\n    port: 0\n  management:\n    port: 0\n  kafka:\n    bootstrap-servers: \"{}\"\n",
             redpanda.endpoint
         ),
     )

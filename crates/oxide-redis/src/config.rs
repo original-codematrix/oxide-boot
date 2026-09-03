@@ -131,6 +131,40 @@ impl RedisTemplate {
         self.timed(async move { conn.get::<_, Option<String>>(&key).await }).await
     }
 
+    /// `MGET key...`, in one round trip. `None` for each key that does not
+    /// exist; the result is positionally aligned with `keys`.
+    ///
+    /// Worth reaching for whenever a handler reads several keys: three
+    /// sequential `get` calls are three round trips, and on a laptop where
+    /// Redis is a container that cost dominates the handler.
+    pub async fn get_many(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
+        if keys.is_empty() {
+            // MGET with no arguments is a protocol error, and "nothing asked
+            // for" has an obvious answer that does not need the server.
+            return Ok(Vec::new());
+        }
+        let mut conn = self.raw()?;
+        let keys: Vec<String> = keys.iter().map(|k| self.key(k)).collect();
+        self.timed(async move { conn.mget::<_, Vec<Option<String>>>(&keys).await }).await
+    }
+
+    /// Runs several commands in one round trip and discards their replies.
+    ///
+    /// The closure receives redis-rs's own pipeline builder, so anything the
+    /// driver can express is available; `RedisTemplate`'s key prefix is *not*
+    /// applied to keys named in there, so use [`RedisTemplate::key`] for them.
+    /// Use this for write batches -- counters, evictions, fan-out `SET`s --
+    /// where the values are not needed back.
+    pub async fn pipeline<F>(&self, build: F) -> Result<()>
+    where
+        F: FnOnce(&mut redis::Pipeline),
+    {
+        let mut conn = self.raw()?;
+        let mut pipe = redis::pipe();
+        build(&mut pipe);
+        self.timed(async move { pipe.query_async::<()>(&mut conn).await }).await
+    }
+
     /// `SET key value`, optionally with `EX ttl`.
     pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<()> {
         let mut conn = self.raw()?;

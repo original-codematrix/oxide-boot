@@ -17,8 +17,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 COMPOSE="docker compose -f $ROOT/deploy/docker-compose.yml"
-MGMT_PORT="${MGMT_PORT:-8081}"
-APP_PORT="${APP_PORT:-8080}"
+MGMT_PORT="${MGMT_PORT:-18081}"
+# 18080/18081, not the framework defaults: the test suite boots apps that bind
+# 8080/8081, so a running stack must not sit on them.
+APP_PORT="${APP_PORT:-18080}"
 BACKLOG="${BACKLOG:-200000}"
 PARTITIONS="${PARTITIONS:-6}"
 OUT="${OUT:-$ROOT/target/kafka-sweep}"

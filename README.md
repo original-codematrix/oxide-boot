@@ -190,6 +190,33 @@ from 4 to 256 against a fixed backlog moves nothing (4 and 64 both land at
 ~5,000 msg/s once warm). Note that the *first* iteration of any sweep reads
 low; discard it.
 
+**What actually made it faster.** On the cache-hit route, measured the same way
+each time:
+
+| change | req/s | p50 |
+|---|---|---|
+| starting point | 11,542 | 1.85 ms |
+| counter moved off the request path | 17,247 (+49%) | 1.14 ms |
+| `K6_IN_NETWORK=1` — load generator inside the network | **27,424** (+59%) | 0.67 ms |
+
+2.4x in total, and neither step touched the handler's actual work. The counter
+was a second Redis round trip on the cache *hit* — the fast path the cache
+exists for. The second step removed the host-to-container hop for HTTP, the
+same boundary that had been capping the Kafka consumer.
+
+What did **not** help: replacing three sequential `get` calls in `/api/stats`
+with one `get_many` (MGET) left throughput unchanged, 16.5k vs 15.2k, inside
+run-to-run noise. That is informative rather than disappointing — if three
+round trips cost the same as one, the round trips are not what the handler is
+paying for. Both `get_many` and `pipeline` are in `RedisTemplate` regardless;
+they earn their keep on higher-latency links, not on a loopback.
+
+Even at 27k req/s the framework floor is 145k, so the remaining gap is still
+the container network, not this code.
+
+The stack publishes the service on **18080/18081**, not the framework defaults,
+so `cargo test` and a running stack no longer fight over 8080/8081.
+
 **Resource use** at ~10,900 req/s plus ~9,000 msg/s, from `docker stats`:
 
 | | CPU (of one core) | memory |
@@ -678,7 +705,7 @@ so no extra quoting is needed for the common case.
 | Spring-Kafka consumer lag | `kafka_consumer_lag{topic, partition, group}` |
 | `@Repository` + Spring Data derived queries | `#[mongo_repository]` + `#[derive(Document)]` |
 | `MongoTemplate` | `MongoClient` (injectable, `collection::<T>(name)`) |
-| `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (injectable) |
+| `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (injectable; `get_many`, `pipeline`) |
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient` | `#[http_client]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |

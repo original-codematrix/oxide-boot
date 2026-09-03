@@ -27,8 +27,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 COMPOSE="docker compose -f $ROOT/deploy/docker-compose.yml"
-APP_PORT="${APP_PORT:-8080}"
-MGMT_PORT="${MGMT_PORT:-8081}"
+# 18080/18081, not the framework defaults: the test suite boots apps that bind
+# 8080/8081, so a running stack must not sit on them.
+APP_PORT="${APP_PORT:-18080}"
+MGMT_PORT="${MGMT_PORT:-18081}"
 KAFKA_SEED="${KAFKA_SEED:-200000}"
 MONGO_SEED="${MONGO_SEED:-50000}"
 VUS="${VUS:-100}"
@@ -41,6 +43,11 @@ CONCURRENT="${CONCURRENT:-0}"
 # its Redis/Mongo/Kafka traffic never crosses Docker Desktop's host-to-VM
 # boundary. Only the HTTP port is published, for k6.
 IN_NETWORK="${IN_NETWORK:-0}"
+# K6_IN_NETWORK=1 runs the load generator as a container on the compose
+# network, so requests no longer cross the host boundary either. On the
+# cache-hit route that alone was worth +59% (17.2k -> 27.4k req/s). Requires
+# IN_NETWORK=1, since it addresses the service by its compose name.
+K6_IN_NETWORK="${K6_IN_NETWORK:-0}"
 DURATION="${DURATION:-60s}"
 OUT="${OUT:-$ROOT/target/benchmark}"
 
@@ -225,6 +232,20 @@ echo "    Grafana: http://localhost:3000/d/oxide-showcase"
 before_consumed=$drain_consumed
 before_ts=$(date +%s)
 
+if [[ "$K6_IN_NETWORK" == "1" ]]; then
+  [[ "$IN_NETWORK" == "1" ]] || { echo "K6_IN_NETWORK=1 requires IN_NETWORK=1" >&2; exit 1; }
+  NET=$(docker inspect oxide-loadtest-showcase-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+  docker run --rm --network "$NET" \
+    -v "$ROOT/scripts:/scripts:ro" -v "$OUT:/out" \
+    -e BASE_URL="http://showcase:8080" -e MGMT_URL="http://showcase:8081" \
+    -e VUS="$VUS" -e DURATION="$DURATION" \
+    -e K6_PROMETHEUS_RW_SERVER_URL="http://prometheus:9090/api/v1/write" \
+    -e K6_PROMETHEUS_RW_TREND_STATS="p(50),p(95),p(99)" \
+    -e K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
+    grafana/k6:latest run -o experimental-prometheus-rw \
+      --summary-export /out/summary.json \
+      /scripts/loadtest-showcase.js "$@" 2>&1 | tee "$OUT/k6.log" || true
+else
 BASE_URL="http://127.0.0.1:${APP_PORT}" \
 MGMT_URL="http://127.0.0.1:${MGMT_PORT}" \
 VUS="$VUS" DURATION="$DURATION" \
@@ -234,6 +255,7 @@ K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
   k6 run -o experimental-prometheus-rw \
     --summary-export "$OUT/summary.json" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true
+fi
 
 kill ${SAMPLER_PID:-} "$CONTAINER_SAMPLER_PID" 2>/dev/null || true
 
