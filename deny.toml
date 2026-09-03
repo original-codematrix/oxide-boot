@@ -37,9 +37,13 @@ private = { ignore = true }
 
 [bans]
 multiple-versions = "warn"
-# Internal crates are path deps that also carry `version = "0.1.0"` in the
-# root Cargo.toml: cargo-deny's wildcard check only exempts `publish = false`
-# crates, and the library crates are publishable. Do not remove those pins.
+# Internal crates are path deps that also carry `version = "0.1.0"` in the root
+# Cargo.toml. Those pins are what keeps `wildcards = "deny"` satisfied here: the
+# `publish = false` exemption only engages together with `allow-wildcard-paths`,
+# which is off by default. Dropping the pins therefore requires setting
+# `allow-wildcard-paths = true` below in the same change -- one without the
+# other fails `cargo deny check bans`. The pins are also what a future
+# `publish = true` would need, so they stay.
 wildcards = "deny"
 
 [sources]
