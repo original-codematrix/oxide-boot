@@ -1,7 +1,7 @@
 # Local CI entry point. Requires: rustup (stable), Docker (container tests),
 # `cargo install cargo-audit cargo-deny --locked`.
 
-.PHONY: fmt clippy test check audit ci msrv clean loadtest loadtest-showcase benchmark stack stack-down
+.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark stack stack-down
 
 fmt:
 	cargo fmt --all -- --check
@@ -23,9 +23,17 @@ ci: check audit
 msrv:
 	cargo +1.88 check --workspace --all-targets
 
-# `target/` is the only thing in this repo that grows without bound.
+# `target/` is the only thing in this repo that grows without bound. A full
+# test build plus release binaries sits around 15 GB with the size-bounded
+# debug profiles; it was 61 GB without them.
 clean:
 	cargo clean
+
+# Drops the ~11 GB of debug artefacts but keeps the release binaries the
+# benchmark and the load-test scripts run, so cleaning up does not cost a
+# ten-minute rebuild before the next run.
+clean-debug:
+	cargo clean --profile dev
 
 # Release build of the rest-api example plus a k6 run against it.
 loadtest:
