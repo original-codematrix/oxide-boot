@@ -75,7 +75,11 @@ services:
     image: prom/prometheus:v3.1.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.retention.time=6h
+      # The Docker VM has 8 GB total. At a 2s scrape interval plus k6's remote
+      # write, an unbounded TSDB grew until the OOM killer took Prometheus out
+      # mid-benchmark (exit 137), taking the dashboard with it.
+      - --storage.tsdb.retention.time=2h
+      - --storage.tsdb.retention.size=512MB
       # k6 pushes its client-side metrics here, so the dashboard can put
       # offered load next to what the service actually did with it.
       - --web.enable-remote-write-receiver
@@ -83,6 +87,7 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
+    mem_limit: 1g
     extra_hosts:
       # Linux hosts do not define this name for us the way Docker Desktop does.
       - "host.docker.internal:host-gateway"

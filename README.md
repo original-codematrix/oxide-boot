@@ -74,6 +74,7 @@ make check    # fmt --check, clippy -D warnings, cargo test --workspace
 make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
 make msrv     # cargo +1.88 check --workspace --all-targets, against the declared MSRV
 make loadtest # release build of the rest-api example under k6 (see below)
+make floor          # the framework's HTTP ceiling, no backends (read the rest against this)
 make benchmark      # all four integrations, phased (see below)
 make stack / stack-down
 make clean    # cargo clean -- `target/` is the only thing here that grows without bound
@@ -143,6 +144,20 @@ no login) with the service's own metrics next to k6's client-side numbers, so
 offered load and handled load sit on the same axis. Nothing here goes near
 Kubernetes: the backing services are local containers and the service itself
 runs on the host from a release build.
+
+**Start with `make floor`.** It drives the rest-api example's in-memory handler
+with no backing service in the path, and answers "is the framework the limit?"
+before any other number is worth reading:
+
+| | |
+|---|---|
+| `make floor` — in-memory handler | **~145,000 req/s**, p50 0.41 ms |
+| showcase, one Redis-backed route | ~11,500-16,500 req/s, p50 ~1.2-1.9 ms |
+| showcase, Mongo list of 50 docs | ~10,300 req/s, p50 1.79 ms |
+
+A tenfold drop the moment a backing service enters the path, on a laptop where
+that service is a container behind Docker Desktop's network. The framework is
+not what these benchmarks measure once a backend is involved.
 
 Reference numbers, M-series laptop, 100 VUs, 200k seeded events, 50k documents:
 

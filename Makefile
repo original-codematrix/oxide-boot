@@ -1,7 +1,7 @@
 # Local CI entry point. Requires: rustup (stable), Docker (container tests),
 # `cargo install cargo-audit cargo-deny --locked`.
 
-.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark stack stack-down
+.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark floor stack stack-down
 
 fmt:
 	cargo fmt --all -- --check
@@ -49,6 +49,11 @@ loadtest-showcase:
 # drain rate in isolation, then run k6 over the REST surface on top of it.
 benchmark:
 	./scripts/benchmark.sh
+
+# The framework's HTTP ceiling with no backing services in the path. Read every
+# other number against this one.
+floor:
+	./scripts/floor.sh
 
 stack:
 	docker compose -f deploy/docker-compose.yml up -d
