@@ -6,7 +6,8 @@ use axum::{Json, Router};
 use oxide_core::Context;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// The health timeout applied to each registered check, per request. A
 /// check that doesn't resolve within this window counts as `Down` with
@@ -58,13 +59,26 @@ fn status_body(up: bool) -> (StatusCode, Json<serde_json::Value>) {
     }
 }
 
-/// Runs every registered check concurrently (each wrapped in a 2s timeout),
-/// aggregates them with `readiness_up`, and renders the Spring-Actuator-style
-/// body: overall UP only if readiness is UP AND every indicator is Up.
-async fn aggregated_health_body(
-    readiness_up: bool,
-    checks: &[(&'static str, RegisteredCheck)],
-) -> (StatusCode, Json<serde_json::Value>) {
+/// The rendered result of running every indicator once: whether all of them
+/// were Up, and the per-component JSON to splice into the response body.
+/// Cached so concurrent/rapid `/actuator/health` requests within the TTL
+/// don't each re-run every indicator.
+#[derive(Clone)]
+struct CachedIndicators {
+    all_up: bool,
+    components: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Shared cache of the last indicator run, keyed by nothing (one aggregator
+/// per health-routes instance): the instant it was recorded, and the
+/// rendered result. `None` until the first request.
+type HealthCache = Mutex<Option<(Instant, CachedIndicators)>>;
+
+/// Runs every registered check concurrently (each wrapped in a 2s timeout)
+/// and renders the Spring-Actuator-style `components` map. `detail` is
+/// included on `DOWN` components only when `show_details` is true —
+/// otherwise driver error text (hosts, URIs) never reaches the response.
+async fn run_indicators(checks: &[(&'static str, RegisteredCheck)], show_details: bool) -> CachedIndicators {
     let results = futures::future::join_all(checks.iter().map(|(name, check)| async move {
         let status = match tokio::time::timeout(CHECK_TIMEOUT, check()).await {
             Ok(status) => status,
@@ -74,30 +88,69 @@ async fn aggregated_health_body(
     }))
     .await;
 
-    let all_indicators_up = results.iter().all(|(_, status)| matches!(status, HealthStatus::Up));
-    let (status_code, Json(mut body)) = status_body(readiness_up && all_indicators_up);
+    let all_up = results.iter().all(|(_, status)| matches!(status, HealthStatus::Up));
 
-    let components: serde_json::Map<String, serde_json::Value> = results
+    let components = results
         .into_iter()
         .map(|(name, status)| {
             let component = match status {
                 HealthStatus::Up => serde_json::json!({ "status": "UP" }),
-                HealthStatus::Down { detail } => serde_json::json!({ "status": "DOWN", "detail": detail }),
+                HealthStatus::Down { detail } if show_details => {
+                    serde_json::json!({ "status": "DOWN", "detail": detail })
+                }
+                HealthStatus::Down { .. } => serde_json::json!({ "status": "DOWN" }),
             };
             (name.to_string(), component)
         })
         .collect();
-    body["components"] = serde_json::Value::Object(components);
+
+    CachedIndicators { all_up, components }
+}
+
+/// Aggregates `readiness_up` with the indicator results, rendering the
+/// Spring-Actuator-style body: overall UP only if readiness is UP AND every
+/// indicator is Up. The indicator run itself is cached for `cache_ttl`: a
+/// request inside the TTL reuses the last render instead of re-running every
+/// check, and the lock is held across the (re-)run so concurrent requests on
+/// a cache miss don't each trigger their own run.
+async fn aggregated_health_body(
+    readiness_up: bool,
+    checks: &[(&'static str, RegisteredCheck)],
+    cache: &HealthCache,
+    cache_ttl: Duration,
+    show_details: bool,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let mut guard = cache.lock().await;
+    let cached = match &*guard {
+        Some((recorded_at, cached)) if recorded_at.elapsed() < cache_ttl => cached.clone(),
+        _ => {
+            let fresh = run_indicators(checks, show_details).await;
+            *guard = Some((Instant::now(), fresh.clone()));
+            fresh
+        }
+    };
+    drop(guard);
+
+    let (status_code, Json(mut body)) = status_body(readiness_up && cached.all_up);
+    body["components"] = serde_json::Value::Object(cached.components);
 
     (status_code, Json(body))
 }
 
 /// Builds the health routes. `/actuator/health` aggregates the given
 /// readiness flag with every resolved indicator `check` (Spring-Actuator
-/// `components` shape); `/actuator/health/readiness` reflects only the
-/// readiness flag; `/actuator/health/liveness` always reports UP.
-pub(crate) fn health_routes(readiness: Arc<AtomicBool>, checks: Vec<(&'static str, RegisteredCheck)>) -> Router {
+/// `components` shape), caching the indicator run for `cache_ttl` and
+/// including `detail` on `DOWN` components only when `show_details` is true;
+/// `/actuator/health/readiness` reflects only the readiness flag;
+/// `/actuator/health/liveness` always reports UP.
+pub(crate) fn health_routes(
+    readiness: Arc<AtomicBool>,
+    checks: Vec<(&'static str, RegisteredCheck)>,
+    cache_ttl: Duration,
+    show_details: bool,
+) -> Router {
     let checks = Arc::new(checks);
+    let cache: Arc<HealthCache> = Arc::new(Mutex::new(None));
     let r1 = Arc::clone(&readiness);
     Router::new()
         .route(
@@ -105,7 +158,11 @@ pub(crate) fn health_routes(readiness: Arc<AtomicBool>, checks: Vec<(&'static st
             get(move || {
                 let readiness = Arc::clone(&r1);
                 let checks = Arc::clone(&checks);
-                async move { aggregated_health_body(readiness.load(Ordering::SeqCst), &checks).await }
+                let cache = Arc::clone(&cache);
+                async move {
+                    aggregated_health_body(readiness.load(Ordering::SeqCst), &checks, &cache, cache_ttl, show_details)
+                        .await
+                }
             }),
         )
         .route("/actuator/health/liveness", get(|| async { status_body(true) }))
@@ -135,7 +192,7 @@ mod tests {
     #[tokio::test]
     async fn readiness_false_yields_503_out_of_service() {
         let readiness = Arc::new(AtomicBool::new(false));
-        let router = health_routes(readiness, Vec::new());
+        let router = health_routes(readiness, Vec::new(), Duration::from_millis(1000), false);
 
         let request = Request::builder().uri("/actuator/health/readiness").body(Body::empty()).unwrap();
         let response = router.oneshot(request).await.unwrap();
@@ -144,5 +201,24 @@ mod tests {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["status"], "OUT_OF_SERVICE");
+    }
+
+    #[tokio::test]
+    async fn indicators_run_once_within_the_cache_ttl() {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let checks: Vec<(&'static str, RegisteredCheck)> = vec![(
+            "demo",
+            Box::new(|| {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { HealthStatus::Up })
+            }),
+        )];
+        let cache: HealthCache = tokio::sync::Mutex::new(None);
+        let ttl = Duration::from_millis(1000);
+
+        let _ = aggregated_health_body(true, &checks, &cache, ttl, false).await;
+        let _ = aggregated_health_body(true, &checks, &cache, ttl, false).await;
+
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
     }
 }

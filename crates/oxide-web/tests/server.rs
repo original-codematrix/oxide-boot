@@ -250,7 +250,14 @@ async fn health_indicator_aggregates_into_actuator_health() {
     let _guard = BOOT_LOCK.lock().await;
     TEST_HEALTH_UP.store(true, std::sync::atomic::Ordering::SeqCst);
     let dir = test_config_dir();
-    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.unwrap();
+    // Two calls to /actuator/health are expected to reflect the state change
+    // between them, so disable the health-result cache here (this test isn't
+    // exercising caching, it's exercising indicator aggregation) and opt in
+    // to `show-details` since it asserts on `detail`.
+    let mut env = HashMap::new();
+    env.insert("OXIDE_MANAGEMENT_HEALTH_CACHE_TTL_MILLIS".to_string(), "0".to_string());
+    env.insert("OXIDE_MANAGEMENT_HEALTH_SHOW_DETAILS".to_string(), "always".to_string());
+    let app = OxideApplication::builder().base_dir(dir.path()).env(env).start().await.unwrap();
     let mgmt_addr = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
     let base = format!("http://{mgmt_addr}");
 

@@ -25,6 +25,12 @@ fn default_address() -> String {
 fn default_exposure() -> String {
     "health,info".to_string()
 }
+fn default_health_cache_ttl_millis() -> u64 {
+    1000
+}
+fn default_show_details() -> String {
+    "never".to_string()
+}
 
 /// Drain grace period for the management server. Management endpoints
 /// (health, info, metrics) don't hold long-running requests, so a short,
@@ -50,6 +56,8 @@ pub struct ManagementProps {
     pub max_body_bytes: usize,
     #[serde(rename = "cors", default)]
     pub cors: CorsProps,
+    #[serde(rename = "health", default)]
+    pub health: HealthProps,
 }
 
 impl Default for ManagementProps {
@@ -62,7 +70,38 @@ impl Default for ManagementProps {
             request_timeout_seconds: default_request_timeout_seconds(),
             max_body_bytes: default_max_body_bytes(),
             cors: CorsProps::default(),
+            health: HealthProps::default(),
         }
+    }
+}
+
+/// Configuration bound to `oxide.management.health`: how `/actuator/health`
+/// caches its indicator run and whether it reveals indicator `detail` text.
+///
+/// `show_details` defaults to `"never"` (Spring Actuator's own default) —
+/// driver error text (Mongo/Kafka host names, connection strings) must not
+/// leak on an unauthenticated endpoint. The only other accepted value is
+/// `"always"`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct HealthProps {
+    #[serde(rename = "cache-ttl-millis", default = "default_health_cache_ttl_millis")]
+    pub cache_ttl_millis: u64,
+    #[serde(rename = "show-details", default = "default_show_details")]
+    pub show_details: String,
+}
+
+impl HealthProps {
+    /// Whether `DOWN` indicator components should include their `detail`
+    /// string, per `show-details` (`"always"`; anything else, including the
+    /// `"never"` default, hides it).
+    pub fn show_details_enabled(&self) -> bool {
+        self.show_details == "always"
+    }
+}
+
+impl Default for HealthProps {
+    fn default() -> Self {
+        Self { cache_ttl_millis: default_health_cache_ttl_millis(), show_details: default_show_details() }
     }
 }
 
@@ -139,7 +178,12 @@ fn build_management_router(ctx: &Context, props: &ManagementProps) -> Result<Rou
     let mut router = Router::new();
     if is_exposed(exposure, "health") {
         router = router.merge(match ctx.get::<crate::server::WebServer>() {
-            Some(server) => health::health_routes(server.readiness(), health::resolve_indicators(ctx)),
+            Some(server) => health::health_routes(
+                server.readiness(),
+                health::resolve_indicators(ctx),
+                Duration::from_millis(props.health.cache_ttl_millis),
+                props.health.show_details_enabled(),
+            ),
             None => health::liveness_only_routes(),
         });
     }
