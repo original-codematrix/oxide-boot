@@ -108,6 +108,11 @@ pub enum WebError {
     DuplicateRoute { method: &'static str, path: &'static str },
     #[error("route '{path}' is reserved: '/actuator' is reserved for the framework's own endpoints")]
     ReservedPath { path: &'static str },
+    #[error(
+        "{name} did not drain in-flight requests within {grace_seconds}s and was forcibly aborted; \
+         in-flight requests were cut off mid-flight"
+    )]
+    DrainAborted { name: &'static str, grace_seconds: u64 },
 }
 
 #[cfg(test)]

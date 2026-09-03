@@ -13,6 +13,9 @@ fn default_port() -> u16 {
 fn default_grace() -> u64 {
     30
 }
+fn default_readiness_grace_seconds() -> u64 {
+    0
+}
 fn default_address() -> String {
     "0.0.0.0".to_string()
 }
@@ -40,6 +43,8 @@ pub struct ServerProps {
     pub max_body_bytes: usize,
     #[serde(rename = "cors", default)]
     pub cors: crate::hardening::CorsProps,
+    #[serde(rename = "shutdown", default)]
+    pub shutdown: ShutdownProps,
 }
 
 impl Default for ServerProps {
@@ -51,7 +56,30 @@ impl Default for ServerProps {
             request_timeout_seconds: default_request_timeout_seconds(),
             max_body_bytes: default_max_body_bytes(),
             cors: crate::hardening::CorsProps::default(),
+            shutdown: ShutdownProps::default(),
         }
+    }
+}
+
+/// Configuration bound to `oxide.server.shutdown`. Deliberately a separate
+/// nested struct rather than a field alongside the existing flat
+/// `shutdown-grace-seconds` on `ServerProps` — that flat property predates
+/// this one and is left as-is to avoid a breaking rename; the two properties
+/// are inconsistent in shape for that reason.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ShutdownProps {
+    /// How long `pre_destroy` waits, after flipping readiness to `DOWN` and
+    /// before starting the drain, so a load balancer has a chance to see the
+    /// readiness flip and stop routing new traffic before connections start
+    /// being refused. `0` (the default) preserves the previous behaviour:
+    /// draining begins immediately.
+    #[serde(rename = "readiness-grace-seconds", default = "default_readiness_grace_seconds")]
+    pub readiness_grace_seconds: u64,
+}
+
+impl Default for ShutdownProps {
+    fn default() -> Self {
+        Self { readiness_grace_seconds: default_readiness_grace_seconds() }
     }
 }
 
@@ -59,6 +87,7 @@ impl Default for ServerProps {
 /// shuts down on `pre_destroy`.
 pub struct WebServer {
     readiness: Arc<AtomicBool>,
+    readiness_grace: std::time::Duration,
     serving: HttpServing,
 }
 
@@ -66,6 +95,7 @@ impl WebServer {
     fn new(props: ServerProps) -> Self {
         Self {
             readiness: Arc::new(AtomicBool::new(false)),
+            readiness_grace: std::time::Duration::from_secs(props.shutdown.readiness_grace_seconds),
             serving: HttpServing::new(
                 props.address,
                 props.port,
@@ -93,7 +123,12 @@ impl WebServer {
     }
 
     async fn stop_server(&self) -> ComponentResult<()> {
+        // Flip readiness DOWN and give a load balancer time to notice before
+        // the drain begins refusing new connections.
         self.readiness.store(false, Ordering::SeqCst);
+        if !self.readiness_grace.is_zero() {
+            tokio::time::sleep(self.readiness_grace).await;
+        }
         self.serving.stop().await
     }
 }

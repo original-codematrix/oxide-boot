@@ -86,6 +86,9 @@ impl HttpServing {
                 Err(_) => {
                     tracing::warn!(server = self.name, grace_seconds = self.grace.as_secs(), "drain timed out");
                     handle.abort();
+                    return Err(
+                        crate::WebError::DrainAborted { name: self.name, grace_seconds: self.grace.as_secs() }.into()
+                    );
                 }
             }
         }
