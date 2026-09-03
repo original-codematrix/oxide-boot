@@ -32,8 +32,7 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{BatchSpanProcessor, Sampler, Tracer, TracerProvider};
 use opentelemetry_sdk::{Resource, runtime};
-use oxide_core::{AppConfig, ComponentDescriptor, Context};
-use std::any::TypeId;
+use oxide_core::AppConfig;
 use std::sync::OnceLock;
 
 fn default_sample_ratio() -> f64 {
@@ -110,7 +109,7 @@ pub(crate) fn build_layer(config: &AppConfig) -> Result<Option<OtelLayer>, Box<d
     let Some(endpoint) = props.endpoint else {
         return Ok(None);
     };
-    let service_name: String = config.get_opt("oxide.application.name")?.unwrap_or_else(|| "oxide-app".into());
+    let service_name = config.application_name()?;
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -162,14 +161,20 @@ pub(crate) fn shutdown() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 /// Shutdown/flush component: presence in the context has no other effect,
 /// its `pre_destroy` is the only reason it exists.
 ///
-/// Hand-written descriptor rather than `#[oxide_boot::component]`: the
-/// macro doesn't expose `destroy_order` (out of scope for this phase), and
-/// this component's entire purpose is to run its flush last. `destroy_order
-/// (100)` — the framework's reserved telemetry-flush slot — guarantees the
-/// flush runs after every span-producing component has stopped, turning
-/// what used to be an alphabetical-sort coincidence (reverse construction
-/// order among order-0 components) into an explicit guarantee.
-pub struct OtelLifecycle {}
+/// `destroy_order(100)` — the framework's reserved telemetry-flush slot —
+/// guarantees the flush runs after every span-producing component has
+/// stopped, turning what used to be an alphabetical-sort coincidence
+/// (reverse construction order among order-0 components) into an explicit
+/// guarantee.
+///
+/// `config` is injected rather than threaded through `pre_destroy` because
+/// the `#[component]` macro's generated hooks call `Self::method(&self)`
+/// with no extra arguments — a plain field is the way for a hook to reach
+/// anything beyond `self`.
+#[oxide_boot::component(pre_destroy = flush, destroy_order = 100)]
+pub struct OtelLifecycle {
+    config: AppConfig,
+}
 
 /// Runs `work` on a plain, detached `std::thread::spawn` — deliberately NOT
 /// `tokio::task::spawn_blocking` — bounded by `timeout`, and reports which
@@ -232,8 +237,8 @@ impl OtelLifecycle {
     /// On timeout this logs a warning naming the endpoint and the
     /// configured timeout, then returns `Ok(())` — shutdown continues
     /// either way, it never hangs and never fails `stop()`.
-    async fn flush(&self, config: &AppConfig) -> oxide_core::ComponentResult<()> {
-        let props: OtelProps = config.get_opt("oxide.otel")?.unwrap_or_default();
+    async fn flush(&self) -> oxide_core::ComponentResult<()> {
+        let props: OtelProps = self.config.get_opt("oxide.otel")?.unwrap_or_default();
         let timeout = std::time::Duration::from_secs(props.shutdown_timeout_seconds);
 
         match run_detached_with_timeout(timeout, shutdown).await {
@@ -253,31 +258,6 @@ impl OtelLifecycle {
             Err(_recv_error) => Err("OTel shutdown thread dropped its result sender without completing".into()),
         }
     }
-}
-
-inventory::submit! {
-    ComponentDescriptor::builder(
-        "OtelLifecycle",
-        TypeId::of::<OtelLifecycle>,
-        |builder| {
-            builder.insert(OtelLifecycle {});
-            Ok(())
-        },
-    )
-    // Safe by construction: `assemble` runs every component's `construct`
-    // closure (including this one, right above) before any `pre_destroy`
-    // hook runs, so `OtelLifecycle` is unconditionally already in the
-    // context by the time this fires.
-    .pre_destroy(|ctx: &Context| {
-        let me = ctx.get::<OtelLifecycle>().expect("component exists during shutdown");
-        // `AppConfig` is inserted directly into the seed `ContextBuilder` in
-        // `AppBuilder::start`, before `assemble` even runs — it is present
-        // in every context, unconditionally, for the lifetime of the app.
-        let config = ctx.get::<AppConfig>().expect("AppConfig is always seeded by OxideApplication");
-        Box::pin(async move { me.flush(&config).await })
-    })
-    .destroy_order(100)
-    .build()
 }
 
 /// Test-only seam. `#[doc(hidden)]` because it mutates process-global

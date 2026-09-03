@@ -1,0 +1,5 @@
+error: expected `destroy_order = <integer literal>`, e.g. `destroy_order = -100`
+ --> tests/ui/component_bad_destroy_order.rs:3:13
+  |
+3 | #[component(destroy_order = "soon")]
+  |             ^^^^^^^^^^^^^^^^^^^^^^

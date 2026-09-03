@@ -6,16 +6,13 @@
 
 use crate::hardening::CorsProps;
 use crate::serve::HttpServing;
-use crate::server::{default_max_body_bytes, default_request_timeout_seconds};
+use crate::server::{default_max_body_bytes, default_port, default_request_timeout_seconds};
 use crate::{WebError, health};
 use axum::{Json, Router};
 use oxide_core::{AppConfig, ComponentDescriptor, ComponentResult, Context};
 use std::net::SocketAddr;
 use std::time::Duration;
 
-fn default_port() -> u16 {
-    8081
-}
 fn default_enabled() -> bool {
     true
 }
@@ -44,7 +41,7 @@ const MANAGEMENT_SHUTDOWN_GRACE_SECONDS: u64 = 5;
 pub struct ManagementProps {
     #[serde(default = "default_address")]
     pub address: String,
-    #[serde(default = "default_port")]
+    #[serde(default = "default_port::<8081>")]
     pub port: u16,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
@@ -64,7 +61,7 @@ impl Default for ManagementProps {
     fn default() -> Self {
         Self {
             address: default_address(),
-            port: default_port(),
+            port: default_port::<8081>(),
             enabled: default_enabled(),
             endpoints: EndpointsProps::default(),
             request_timeout_seconds: default_request_timeout_seconds(),
@@ -157,7 +154,7 @@ fn validate_management_routes(routes: &[&ManagementRoute]) -> Result<(), WebErro
 }
 
 async fn info(config: oxide_core::Inject<AppConfig>) -> Json<serde_json::Value> {
-    let name: String = config.get_opt("oxide.application.name").ok().flatten().unwrap_or_else(|| "oxide-app".into());
+    let name = config.application_name().unwrap_or_else(|_| "oxide-app".into());
     Json(serde_json::json!({
         "application": {
             "name": name,

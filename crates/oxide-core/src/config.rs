@@ -112,6 +112,15 @@ impl AppConfig {
     fn lookup(&self, path: &str) -> Option<&Value> {
         lookup_path(&self.root, path)
     }
+
+    /// Resolves `oxide.application.name`, falling back to `"oxide-app"` when
+    /// the key is absent. Shared by every call site that needs the
+    /// application's display name (boot's startup log line, the OTel
+    /// `service.name` resource, `/actuator/info`) — previously each
+    /// resolved the same key/fallback independently.
+    pub fn application_name(&self) -> Result<String, ConfigError> {
+        Ok(self.get_opt("oxide.application.name")?.unwrap_or_else(|| "oxide-app".into()))
+    }
 }
 
 /// Case-insensitive comparison key: lowercased, `-` and `_` stripped.

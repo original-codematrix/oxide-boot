@@ -5,10 +5,14 @@ use syn::{Field, Fields, Ident, ItemStruct, parse::Parser};
 pub struct ComponentArgs {
     pub post_construct: Option<Ident>,
     pub pre_destroy: Option<Ident>,
+    /// Shutdown slot, same semantics as `ComponentDescriptor::destroy_order`
+    /// (see `oxide_core::container`): defaults to `0`, the framework's
+    /// normal-component default, when the argument is absent.
+    pub destroy_order: i32,
 }
 
 pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
-    let mut out = ComponentArgs { post_construct: None, pre_destroy: None };
+    let mut out = ComponentArgs { post_construct: None, pre_destroy: None, destroy_order: 0 };
     if args.is_empty() {
         return Ok(out);
     }
@@ -19,8 +23,20 @@ pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
         } else if meta.path.is_ident("pre_destroy") {
             out.pre_destroy = Some(meta.value()?.parse()?);
             Ok(())
+        } else if meta.path.is_ident("destroy_order") {
+            let value = meta.value()?;
+            let negative = value.parse::<Option<syn::Token![-]>>().is_ok_and(|minus| minus.is_some());
+            let lit: syn::LitInt = value
+                .parse()
+                .map_err(|_| meta.error("expected `destroy_order = <integer literal>`, e.g. `destroy_order = -100`"))?;
+            let magnitude: i32 = lit
+                .base10_parse()
+                .map_err(|_| syn::Error::new_spanned(&lit, "`destroy_order` must fit in an `i32`"))?;
+            out.destroy_order = if negative { -magnitude } else { magnitude };
+            Ok(())
         } else {
-            Err(meta.error("expected `post_construct = <method>` or `pre_destroy = <method>`"))
+            Err(meta
+                .error("expected `post_construct = <method>`, `pre_destroy = <method>` or `destroy_order = <integer>`"))
         }
     });
     parser.parse2(args)?;
@@ -87,6 +103,8 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     });
 
+    let destroy_order = args.destroy_order;
+
     Ok(quote! {
         #item
 
@@ -103,6 +121,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             .deps(|| <[_]>::into_vec(::std::boxed::Box::new([#(#deps),*])))
             #maybe_post_construct
             #maybe_pre_destroy
+            .destroy_order(#destroy_order)
             .build()
         }
     })

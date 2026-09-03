@@ -12,31 +12,36 @@
 // `destroy_order` (0) — no `.destroy_order(...)` call, same as every
 // existing component. `LateStop` explicitly sets `.destroy_order(100)`, the
 // framework's reserved telemetry-flush slot, to prove any component (not
-// just `OtelLifecycle`) can opt into running last.
+// just `OtelLifecycle`) can opt into running last. `EarlyStop` is registered
+// via `#[component(destroy_order = -100)]` — the macro-driven path — to
+// prove the macro's `destroy_order` argument produces a descriptor that
+// actually stops in the right slot, not just one that compiles.
 //
-// All three are handwritten `ComponentDescriptor`s (not `#[component]`):
-// the macro doesn't expose `destroy_order` in this phase (see task brief),
-// so hooks are wired directly via the builder, same pattern as
-// `oxide-core::container`'s own unit tests and `oxide-observability`'s
-// `OtelLifecycle`.
+// `AlphaStop`, `MidStop` and `LateStop` are handwritten `ComponentDescriptor`s
+// (not `#[component]`): they exist to pin the pre-existing ordering
+// contract itself (independent of how a descriptor gets registered), same
+// pattern as `oxide-core::container`'s own unit tests and
+// `oxide-observability`'s `OtelLifecycle`.
 //
 // Order reasoning, spelled out:
 //   - Independent components (no deps) construct in ascending `type_name`
-//     order (`oxide_core::container::assemble`): "AlphaStop" < "LateStop" <
-//     "MidStop", so construction order is Alpha, Late, Mid — regardless of
-//     the registration order below (Alpha is registered before Mid, but
-//     that only matters for tie-breaking within `assemble`'s own
-//     `sort_by_key(type_name)`, which is alphabetical anyway).
+//     order (`oxide_core::container::assemble`): "AlphaStop" < "EarlyStop" <
+//     "LateStop" < "MidStop", so construction order is Alpha, Early, Late,
+//     Mid — regardless of the registration order below (Alpha is registered
+//     before Mid, but that only matters for tie-breaking within
+//     `assemble`'s own `sort_by_key(type_name)`, which is alphabetical
+//     anyway).
 //   - `Application::stop` takes `self.order.iter().rev()`: reverse of
-//     [Alpha, Late, Mid] is [Mid, Late, Alpha].
+//     [Alpha, Early, Late, Mid] is [Mid, Late, Early, Alpha].
 //   - It then stably sorts that reversed list by `destroy_order`. Keys are
-//     [Mid: 0, Late: 100, Alpha: 0]. A stable sort groups equal keys while
-//     preserving their relative order from the input: the two order-0
-//     entries, Mid and Alpha, keep their relative order (Mid before Alpha,
-//     as in the reversed list) and both sort before the single order-100
-//     entry, Late. Result: [Mid, Alpha, Late].
+//     [Mid: 0, Late: 100, Early: -100, Alpha: 0]. A stable sort groups equal
+//     keys while preserving their relative order from the input: the two
+//     order-0 entries, Mid and Alpha, keep their relative order (Mid before
+//     Alpha, as in the reversed list); Early (-100) sorts before both; Late
+//     (100) sorts after both. Result: [Early, Mid, Alpha, Late].
 //
-// Hence the expected recorded order is ["MidStop", "AlphaStop", "LateStop"].
+// Hence the expected recorded order is
+// ["EarlyStop", "MidStop", "AlphaStop", "LateStop"].
 use oxide_boot::prelude::*;
 use oxide_core::{ComponentDescriptor, Context};
 use std::any::TypeId;
@@ -48,6 +53,16 @@ static RECORDED: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 struct AlphaStop {}
 struct MidStop {}
 struct LateStop {}
+
+#[component(destroy_order = -100, pre_destroy = record)]
+struct EarlyStop {}
+
+impl EarlyStop {
+    async fn record(&self) -> ComponentResult<()> {
+        RECORDED.lock().unwrap().push("EarlyStop");
+        Ok(())
+    }
+}
 
 // Hooks record directly in the closure passed to `.pre_destroy` rather than
 // via a named `async fn(&Context)`: `HookFn` requires the returned future to
@@ -129,5 +144,5 @@ async fn pre_destroy_hooks_run_by_destroy_order_then_reverse_construction_order(
     app.stop().await.unwrap();
 
     let recorded = RECORDED.lock().unwrap();
-    assert_eq!(*recorded, vec!["MidStop", "AlphaStop", "LateStop"]);
+    assert_eq!(*recorded, vec!["EarlyStop", "MidStop", "AlphaStop", "LateStop"]);
 }

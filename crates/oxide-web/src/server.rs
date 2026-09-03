@@ -7,8 +7,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-fn default_port() -> u16 {
-    8080
+/// Shared shape behind the two per-server `default_port` helpers
+/// (`ServerProps`'s `8080`, `ManagementProps`'s `8081` in `management.rs`):
+/// same default-value function, parameterized on the const rather than
+/// duplicated per port.
+pub(crate) fn default_port<const PORT: u16>() -> u16 {
+    PORT
 }
 fn default_grace() -> u64 {
     30
@@ -33,7 +37,7 @@ pub(crate) fn default_max_body_bytes() -> usize {
 pub struct ServerProps {
     #[serde(default = "default_address")]
     pub address: String,
-    #[serde(default = "default_port")]
+    #[serde(default = "default_port::<8080>")]
     pub port: u16,
     #[serde(rename = "shutdown-grace-seconds", default = "default_grace")]
     pub shutdown_grace_seconds: u64,
@@ -51,7 +55,7 @@ impl Default for ServerProps {
     fn default() -> Self {
         Self {
             address: default_address(),
-            port: default_port(),
+            port: default_port::<8080>(),
             shutdown_grace_seconds: default_grace(),
             request_timeout_seconds: default_request_timeout_seconds(),
             max_body_bytes: default_max_body_bytes(),

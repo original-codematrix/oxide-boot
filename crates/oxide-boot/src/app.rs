@@ -80,7 +80,7 @@ impl AppBuilder {
         });
         let config = AppConfig::load(&self.base_dir, &env)?;
         crate::logging::run_highest_priority(&config)?;
-        let name: String = config.get_opt("oxide.application.name")?.unwrap_or_else(|| "oxide-app".into());
+        let name = config.application_name()?;
         tracing::info!(
             application = %name,
             profiles = ?config.profiles(),
