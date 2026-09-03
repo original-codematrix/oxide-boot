@@ -14,6 +14,7 @@ pub mod __private {
     pub use crate::logging::LoggingInitializer;
     pub use inventory;
     pub use oxide_core::*;
+    pub use serde;
     pub use tokio;
 }
 

@@ -44,6 +44,14 @@ greeter:
 
 Run the example: `cd examples/hello-world && cargo run`
 
+Add `default` (`#[config(prefix = "greeter", default)]`) to tolerate a
+missing section, falling back to `Default`. That variant additionally
+requires `#[derive(serde::Serialize)]`: the struct's `Default` value is
+serialized and seeded into the config tree before environment-variable
+overrides run, so multi-segment kebab-case keys (e.g.
+`shutdown-grace-seconds`) exist as leaves even when the section is absent
+from YAML — see "Environment overrides" below.
+
 ## Development
 
 Toolchain: Rust **1.88+** (`rust-version` in `Cargo.toml`); `rust-toolchain.toml`
@@ -405,11 +413,21 @@ maps to `greeter.name` when `greeter:` exists in the YAML; (3) otherwise a new
 key is created under `oxide.a.b`. "Existing" means intermediate levels must
 already be present as keys — only the final leaf may be newly created, and
 only once at least one existing level was matched. Kebab-case leaves (e.g.
-`sample-ratio`, `shutdown-grace-seconds`) can only be matched this way, not
-newly created: `OXIDE_OTEL_SAMPLE_RATIO` maps back to `sample-ratio` when that
-key already exists under `oxide.otel`, but if it doesn't, the env var creates
-a nested `oxide.otel.sample.ratio` path instead — silently missing the
-kebab-case key it was meant to override.
+`sample-ratio`, `shutdown-grace-seconds`) can therefore only be matched this
+way, not newly created out of thin air: `OXIDE_OTEL_SAMPLE_RATIO` maps back
+to `sample-ratio` only when that key already exists under `oxide.otel`.
+
+For any `#[config(prefix = "...", default)]` struct (the framework's own
+`ServerProps`, `ManagementProps`, `OtelProps`, etc.), that key always
+"already exists": its `Default` is seeded into the config tree under its
+prefix before env overrides run, so `oxide.otel.sample-ratio` is present
+even with no `oxide.otel:` section in YAML at all, and `OXIDE_OTEL_SAMPLE_RATIO`
+binds to it correctly. This seeding only fills in *absent* keys — anything
+you do write in YAML wins over the seeded default. For properties without
+`default` (e.g. `oxide.kafka.bootstrap-servers`, which is required), or for
+app-level kebab-case keys you define yourself outside `oxide:`, the original
+rule still applies as stated above: the section must already exist in YAML
+for a multi-segment env var to bind to a hyphenated leaf inside it.
 
 ## Spring-to-Oxide cheat sheet
 
