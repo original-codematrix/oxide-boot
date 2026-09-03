@@ -87,6 +87,39 @@ services:
       # Linux hosts do not define this name for us the way Docker Desktop does.
       - "host.docker.internal:host-gateway"
 
+  # The service itself, in the compose network. Opt-in via the `in-network`
+  # profile, because the default flow runs it on the host from `cargo run`,
+  # where a code change is a restart rather than an image build.
+  #
+  #   docker compose --profile in-network up -d --build showcase
+  #
+  # Inside the network it reaches the backing services by service name and on
+  # their *internal* ports, so none of its traffic crosses the host boundary.
+  showcase:
+    profiles: ["in-network"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      OXIDE_SERVER_PORT: "8080"
+      OXIDE_MANAGEMENT_PORT: "8081"
+      OXIDE_KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      OXIDE_MONGO_URI: "mongodb://mongo:27017"
+      OXIDE_REDIS_URL: "redis://dragonfly:6379"
+      OXIDE_LOGGING_LEVEL_ROOT: "warn"
+    ports:
+      # Only the HTTP surface is published, so k6 on the host still drives it.
+      # That one crossing is unavoidable without running k6 in here too.
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      dragonfly:
+        condition: service_healthy
+
   grafana:
     image: grafana/grafana:11.5.1
     environment:

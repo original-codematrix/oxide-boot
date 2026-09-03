@@ -37,6 +37,10 @@ VUS="${VUS:-100}"
 # capacity: with a fully drained backlog the consumer merely keeps pace with
 # whatever the load test produces, which measures offered load, not capacity.
 CONCURRENT="${CONCURRENT:-0}"
+# IN_NETWORK=1 runs the service as a compose service instead of on the host, so
+# its Redis/Mongo/Kafka traffic never crosses Docker Desktop's host-to-VM
+# boundary. Only the HTTP port is published, for k6.
+IN_NETWORK="${IN_NETWORK:-0}"
 DURATION="${DURATION:-60s}"
 OUT="${OUT:-$ROOT/target/benchmark}"
 
@@ -65,6 +69,19 @@ counter() {
 }
 
 start_app() {
+  if [[ "$IN_NETWORK" == "1" ]]; then
+    # --force-recreate: the service's Prometheus counters are cumulative over
+    # the container's lifetime, so reusing a running container carries the
+    # previous run's totals into this one's deltas.
+    $COMPOSE --profile in-network up -d --build --force-recreate showcase >/dev/null
+    for _ in $(seq 1 120); do
+      curl -fsS "http://127.0.0.1:${MGMT_PORT}/actuator/health" >/dev/null 2>&1 && return 0
+      sleep 1
+    done
+    echo "in-network service did not become healthy within 120s" >&2
+    $COMPOSE logs --tail=40 showcase >&2
+    exit 1
+  fi
   OXIDE_SERVER_PORT="$APP_PORT" \
   OXIDE_MANAGEMENT_PORT="$MGMT_PORT" \
   OXIDE_KAFKA_BOOTSTRAP_SERVERS="localhost:19092" \
@@ -99,15 +116,28 @@ done
 # A clean slate each run: a backlog left over from a previous benchmark would
 # be drained during phase 2 and inflate the number.
 echo "==> resetting state (mongo collection, kafka topic, redis counters)"
+# A service left running from a previous run still holds the consumer group,
+# which makes deleting and recreating the topic fail.
+$COMPOSE --profile in-network rm -sf showcase >/dev/null 2>&1 || true
 $COMPOSE exec -T mongo mongosh --quiet --eval 'db.getSiblingDB("showcase").notes.drop()' >/dev/null 2>&1 || true
 # Plain `rpk`: the broker runs a separate internal listener advertised as
 # `redpanda:9092`, so in-container clients resolve an address that exists on
 # the compose network (see docker-compose.yml).
 RPK="$COMPOSE exec -T redpanda rpk"
+# The consumer group has to go with the topic. Leaving it behind means the
+# group still holds committed offsets for the *deleted* topic's partitions;
+# the next commit against the recreated (empty) partitions then crashes
+# Redpanda v24.2.1 outright -- "Assert failure: Empty batch written to
+# __consumer_offsets", exit 133. Reproduced twice.
+$RPK group delete showcase >/dev/null 2>&1 || true
 $RPK topic delete notes-events >/dev/null 2>&1 || true
 # 6 partitions: the listener's default concurrency is 4, and a single-partition
 # topic would cap the consumer at one in-order stream regardless of that.
-$RPK topic create notes-events -p 6 >/dev/null
+# Idempotent: an "already exists" here is fine, an unreachable broker is not,
+# so the topic is verified rather than trusting the exit code.
+$RPK topic create notes-events -p 6 >/dev/null 2>&1 || true
+$RPK topic list 2>/dev/null | grep -q '^notes-events' \
+  || { echo "could not create the notes-events topic" >&2; $RPK cluster info >&2; exit 1; }
 $COMPOSE exec -T dragonfly redis-cli FLUSHALL >/dev/null 2>&1 || true
 
 echo
@@ -168,10 +198,29 @@ sample_resources() {
   done
 }
 
+# The backing services are where the load actually lands, and reporting only
+# the service process makes the system look almost idle when it is not.
+sample_containers() {
+  local out=$1
+  echo "name cpu_pct mem_mb" > "$out"
+  while :; do
+    LC_ALL=C docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null \
+      | awk '{gsub(/%/,"",$2); gsub(/MiB|GiB/,"",$3); print $1, $2, $3}' >> "$out"
+    sleep 2
+  done
+}
+
 echo
 echo "=== phase 3: load (k6 over REST + Mongo + Redis + Kafka) ============"
-sample_resources "$APP_PID" "$OUT/resources.txt" &
-SAMPLER_PID=$!
+# Truncate first: otherwise an IN_NETWORK run reports the previous host run's
+# samples as if they were its own.
+: > "$OUT/resources.txt"
+if [[ -n "$APP_PID" ]]; then
+  sample_resources "$APP_PID" "$OUT/resources.txt" &
+  SAMPLER_PID=$!
+fi
+sample_containers "$OUT/containers.txt" &
+CONTAINER_SAMPLER_PID=$!
 echo "    Grafana: http://localhost:3000/d/oxide-showcase"
 before_consumed=$drain_consumed
 before_ts=$(date +%s)
@@ -186,7 +235,7 @@ K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
     --summary-export "$OUT/summary.json" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true
 
-kill "$SAMPLER_PID" 2>/dev/null || true
+kill ${SAMPLER_PID:-} "$CONTAINER_SAMPLER_PID" 2>/dev/null || true
 
 after_consumed=$(counter showcase_events_consumed_total); after_consumed=${after_consumed%.*}
 after_produced=$(counter showcase_notes_created_total); after_produced=${after_produced%.*}
@@ -222,7 +271,11 @@ else
   echo "                                  the produce rate, it is NOT a capacity measurement)"
 fi
 echo
-echo "  resource use (the service process only, backing services excluded):"
+if [[ "$IN_NETWORK" == "1" ]]; then
+  echo "  service runs in-network; see the showcase container in the table below"
+else
+  echo "  resource use (host service process):"
+fi
 python3 - "$OUT/resources.txt" "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" <<'PY2'
 import sys
 try:
@@ -241,6 +294,30 @@ print(f"    CPU avg / peak ............. {sum(cpu)/len(cpu):.0f}% / {max(cpu):.0
 print(f"    RSS avg / peak ............. {sum(rss)/len(rss)/1024:.0f} MB / {max(rss)/1024:.0f} MB")
 print(f"    samples .................... {len(cpu)} (1/s)")
 PY2
+
+echo
+echo "  backing services (docker stats, %CPU is of one core):"
+python3 - "$OUT/containers.txt" <<'PY3'
+import sys
+from collections import defaultdict
+try:
+    lines = open(sys.argv[1]).read().splitlines()[1:]
+except Exception as e:
+    print(f"    (no samples: {e})"); raise SystemExit
+cpu, mem = defaultdict(list), defaultdict(list)
+for l in lines:
+    p = l.split()
+    if len(p) < 3: continue
+    try:
+        cpu[p[0]].append(float(p[1])); mem[p[0]].append(float(p[2]))
+    except ValueError:
+        continue
+if not cpu:
+    print("    (no samples)"); raise SystemExit
+for name in sorted(cpu, key=lambda n: -max(cpu[n])):
+    c, m = cpu[name], mem[name]
+    print(f"    {name:34s} CPU avg {sum(c)/len(c):6.0f}%  peak {max(c):6.0f}%   mem {max(m):6.0f} MB")
+PY3
 
 echo
 echo "  service counters:"

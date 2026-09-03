@@ -8,11 +8,17 @@ scrape_configs:
   - job_name: showcase
     metrics_path: /actuator/prometheus
     static_configs:
-      # The app runs on the host, not in this compose network -- see the
-      # comment at the top of docker-compose.yml.
+      # Both are listed on purpose: the service runs on the host by default and
+      # inside the network under the `in-network` compose profile. Whichever is
+      # not running simply shows as a down target.
       - targets: ["host.docker.internal:8081"]
         labels:
           service: showcase
+          placement: host
+      - targets: ["showcase:8081"]
+        labels:
+          service: showcase
+          placement: in-network
 
   - job_name: prometheus
     static_configs:

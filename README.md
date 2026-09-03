@@ -74,6 +74,8 @@ make check    # fmt --check, clippy -D warnings, cargo test --workspace
 make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
 make msrv     # cargo +1.88 check --workspace --all-targets, against the declared MSRV
 make loadtest # release build of the rest-api example under k6 (see below)
+make benchmark      # all four integrations, phased (see below)
+make stack / stack-down
 make clean    # cargo clean -- `target/` is the only thing here that grows without bound
 ```
 
@@ -149,30 +151,49 @@ Reference numbers, M-series laptop, 100 VUs, 200k seeded events, 50k documents:
 | HTTP throughput | ~11,500 req/s |
 | HTTP p50 / p95 / p99 | 6.4 ms / 16 ms / 27 ms |
 | HTTP failure rate | 0% (1.56M checks, none failed) |
-| Kafka consume, idle | ~4,200 msg/s |
-| Kafka consume, under HTTP load | ~700 msg/s |
+| Kafka consume, idle (host) | ~5,000 msg/s |
+| Kafka consume, idle (in-network) | ~9,090 msg/s |
 | Seed producer rate | ~174,000 msg/s (broker ceiling) |
 
-Those two numbers are measured **separately**, and that matters. `CONCURRENT=1`
-runs the HTTP load while the Kafka backlog is still draining, so both paths are
-saturated at once; both then collapse together — HTTP to ~2,600-3,200 req/s and
-the consumer to ~130-200 msg/s — while the service sits at 2-3% of 12 cores and
-60 MB RSS, and Redis, Mongo and Kafka all start reporting timeouts at the same
-moment.
+Those two numbers are measured **separately**, and that matters.
 
-That collapse is **not** the framework. It is this measurement rig on macOS.
-Probing Redis from the host during a loaded run gives p50 6.5 ms against 0.14 ms
-on an idle stack — a 46x degradation while Redis itself is serving only ~4,000
-ops/s, far below the ~6,500 sequential and ~359,000 pipelined ops/s a single
-connection sustains through the same port mapping when nothing else is running.
-Raising the listener's concurrency from 4 to 64 changes nothing, which rules out
-the framework's own semaphore. What degrades is the host-to-container network
-path that Docker Desktop for macOS provides, and every backing service crosses it.
+**Where the service runs changes the result.** `IN_NETWORK=1` runs it as a
+compose service instead of on the host, so its Redis/Mongo/Kafka traffic stops
+crossing Docker Desktop's host-to-VM boundary:
 
-So: the isolated numbers above are trustworthy, and the combined number from
-this rig is not. Getting a real combined figure means putting the service on the
-same side of that boundary — running it inside the compose network, or on Linux
-where containers share the host's network namespace.
+| | on the host | in the compose network |
+|---|---|---|
+| Kafka consume, idle | ~5,000 msg/s | **~9,090 msg/s** |
+| HTTP, no backlog | ~11,500 req/s | ~10,900 req/s |
+
+The consumer nearly doubles; HTTP does not, because k6 still reaches it across
+that same boundary. The listener does one Redis round trip per message, and
+~5,000 msg/s is close to the ~6,500 sequential ops/s one connection sustains
+through the port mapping — that round trip, not the framework, is the cap.
+`scripts/kafka-sweep.sh` confirms it: sweeping `oxide.kafka.consumer.concurrency`
+from 4 to 256 against a fixed backlog moves nothing (4 and 64 both land at
+~5,000 msg/s once warm). Note that the *first* iteration of any sweep reads
+low; discard it.
+
+**Resource use** at ~10,900 req/s plus ~9,000 msg/s, from `docker stats`:
+
+| | CPU (of one core) | memory |
+|---|---|---|
+| the service | 182% avg, 280-305% peak | 79-149 MB |
+| MongoDB | 148% avg | 248 MB |
+| Redpanda | 51% avg | 530 MB |
+| Dragonfly | 40% avg | 50 MB |
+| whole stack | ~5.1 of 12 cores | — |
+
+So roughly two cores and under 150 MB for the service itself.
+
+**Saturating both paths at once still costs more than it should.** With
+`CONCURRENT=1 IN_NETWORK=1` the HTTP side drops to ~1,900 req/s while the
+consumer runs at ~1,500-1,900 msg/s, and request *latency stays healthy*
+(p50 5.7 ms, p95 22 ms) — so the requests that run are fast and the load
+generator is simply completing fewer iterations. That gap is not explained
+yet, and it is not the listener's concurrency. Treat the isolated figures as
+the trustworthy ones.
 
 The first run of this benchmark measured 364 req/s at a p95 of 544 ms. The
 cause was not the framework: `GET /api/notes` had no result cap, so against a
@@ -671,3 +692,12 @@ not, and the gap is worth knowing before betting on this:
 Also missing from the DI container itself: `@Import`-style explicit
 configuration classes, injection by trait (only concrete types resolve),
 `@MockBean`-style replacement in tests, and pagination in derived queries.
+
+### A Redpanda crash worth knowing about
+
+Recreating the `notes-events` topic while the `showcase` consumer group still
+holds committed offsets for the *deleted* topic kills Redpanda v24.2.1: the next
+offset commit against the recreated, empty partitions trips an internal
+assertion (`Empty batch written to __consumer_offsets`) and the broker exits
+133. Reproduced twice. `scripts/benchmark.sh` therefore deletes the consumer
+group before the topic; if you write your own reset step, do the same.
