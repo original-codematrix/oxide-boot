@@ -10,7 +10,7 @@ pub mod producer;
 mod retry;
 
 pub use config::{ConsumerProps, KafkaProps, ProducerProps, RetryProps};
-pub use listener::{ListenerDescriptor, ListenerInfra, MessageHeaders, MessageKey, ReceivedMessage};
+pub use listener::{ListenerDescriptor, MessageHeaders, MessageKey, ReceivedMessage};
 pub use oxide_kafka_macros::kafka_listeners;
 pub use producer::{Delivery, KafkaProducer};
 

@@ -155,9 +155,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                     topic: #topic,
                     group_id: #group_lit,
                     listener_name: #listener_name,
-                    start: |__ctx: &::oxide_kafka::__private::Context,
-                            __infra: &::oxide_kafka::ListenerInfra| {
-                        let _ = __infra;
+                    start: |__ctx: &::oxide_kafka::__private::Context| {
                         let __this = __ctx.get::<#self_ty>().ok_or_else(|| {
                             ::oxide_kafka::KafkaError::Other(
                                 ::std::format!("listener component not registered: {}", stringify!(#self_ty)),
