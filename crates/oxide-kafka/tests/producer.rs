@@ -18,14 +18,33 @@ struct Note {
     text: String,
 }
 
+/// Serializes every test in this file that boots a full app: each boot binds
+/// the management server, and running them concurrently (the default for a
+/// `cargo test` binary) races them for the same port — see
+/// `crates/oxide-kafka/tests/retry_dlt.rs` for the established pattern.
+static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Env map requesting ephemeral (OS-assigned) ports for both the app server
+/// and the management server, so parallel/repeated test runs never collide
+/// on a fixed port (e.g. the default management port 8081).
+fn ephemeral_ports_env() -> HashMap<String, String> {
+    [("OXIDE_SERVER_PORT".to_string(), "0".to_string()), ("OXIDE_MANAGEMENT_PORT".to_string(), "0".to_string())]
+        .into_iter()
+        .collect()
+}
+
 /// Boots a minimal application with a kafka config pointing at the shared
 /// Redpanda container, returning the running application.
 async fn boot_with_kafka_config() -> (tempfile::TempDir, oxide_boot::Application) {
     let dir = tempdir().expect("tempdir");
     let yml = format!("oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n", harness::bootstrap_servers().await);
     std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
-    let app =
-        OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.expect("boot oxide app");
+    let app = OxideApplication::builder()
+        .base_dir(dir.path())
+        .env(ephemeral_ports_env())
+        .start()
+        .await
+        .expect("boot oxide app");
     (dir, app)
 }
 
@@ -63,6 +82,7 @@ async fn harness_smoke_metadata_fetch_reaches_broker() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn producer_send_delivers_json_and_key() {
+    let _boot = BOOT_LOCK.lock().await;
     let (_dir, app) = boot_with_kafka_config().await;
     let producer = app.context().get::<KafkaProducer>().expect("KafkaProducer registered");
     let props = harness::kafka_props().await;
@@ -91,14 +111,19 @@ async fn producer_send_delivers_json_and_key() {
 /// sends successfully with these overrides in place.
 #[tokio::test(flavor = "multi_thread")]
 async fn producer_config_binds_timeouts_and_bounds_retries_when_not_idempotent() {
+    let _boot = BOOT_LOCK.lock().await;
     let dir = tempdir().expect("tempdir");
     let yml = format!(
         "oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n    producer:\n      idempotence: false\n      send-timeout-seconds: 3\n      flush-timeout-seconds: 4\n",
         harness::bootstrap_servers().await
     );
     std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
-    let app =
-        OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.expect("boot oxide app");
+    let app = OxideApplication::builder()
+        .base_dir(dir.path())
+        .env(ephemeral_ports_env())
+        .start()
+        .await
+        .expect("boot oxide app");
 
     let props = app.context().get::<KafkaProps>().expect("KafkaProps registered");
     assert_eq!(props.producer.send_timeout_seconds, 3);
@@ -137,6 +162,7 @@ async fn idempotent_producer_config_raises_max_retries() {
 /// than only the very first one succeeding.
 #[tokio::test(flavor = "multi_thread")]
 async fn health_indicator_reuses_cached_consumer_across_checks() {
+    let _boot = BOOT_LOCK.lock().await;
     let (_dir, app) = boot_with_kafka_config().await;
     let mgmt_addr = app.context().get::<oxide_web::ManagementServer>().unwrap().local_addr().unwrap();
 
