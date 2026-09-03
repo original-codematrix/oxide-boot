@@ -9,7 +9,8 @@ use crate::serve::HttpServing;
 use crate::server::{default_max_body_bytes, default_port, default_request_timeout_seconds};
 use crate::{WebError, health};
 use axum::{Json, Router};
-use oxide_core::{AppConfig, ComponentDescriptor, ComponentResult, Context};
+use oxide_boot::component;
+use oxide_core::{AppConfig, ComponentResult, Context};
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -216,22 +217,20 @@ fn build_management_router(ctx: &Context, props: &ManagementProps) -> Result<Rou
 /// Second HTTP server lifecycle component, listening on `oxide.management.port`
 /// (default `8081`). When `enabled: false`, nothing binds and `local_addr()`
 /// stays `None` for the component's lifetime.
+///
+/// `serving` is `#[default]`-constructed rather than derived from `props` at
+/// construction time — see `WebServer`'s equivalent doc comment in
+/// `server.rs` and `HttpServing`'s in `serve.rs`. `post_construct` needs the
+/// assembled `&Context` (to build the management router, including every
+/// registered `ManagementRoute`), so it's declared `start(ctx)`.
+#[component(post_construct = start(ctx), pre_destroy = stop)]
 pub struct ManagementServer {
     props: ManagementProps,
+    #[default]
     serving: HttpServing,
 }
 
 impl ManagementServer {
-    fn new(props: ManagementProps) -> Self {
-        let serving = HttpServing::new(
-            props.address.clone(),
-            props.port,
-            "management server",
-            Duration::from_secs(MANAGEMENT_SHUTDOWN_GRACE_SECONDS),
-        );
-        Self { props, serving }
-    }
-
     /// The bound local address, once the server has started. `None` before
     /// `post_construct` runs, after `pre_destroy` has torn it down, or for
     /// the lifetime of a component with `enabled: false`.
@@ -239,48 +238,21 @@ impl ManagementServer {
         self.serving.local_addr()
     }
 
-    async fn start(&self, router: Router) -> ComponentResult<()> {
-        self.serving.start(router).await?;
+    async fn start(&self, ctx: &Context) -> ComponentResult<()> {
+        if !self.props.enabled {
+            return Ok(());
+        }
+        let router = build_management_router(ctx, &self.props)?;
+        self.serving.start(&self.props.address, self.props.port, "management server", router).await?;
         Ok(())
     }
 
     async fn stop(&self) -> ComponentResult<()> {
-        self.serving.stop().await
-    }
-}
-
-inventory::submit! {
-    ComponentDescriptor::builder(
-        "ManagementServer",
-        std::any::TypeId::of::<ManagementServer>,
-        |b| {
-            let props = b.resolve::<ManagementProps>()?;
-            b.insert(ManagementServer::new((*props).clone()));
-            Ok(())
-        },
-    )
-    .deps(|| vec![(std::any::TypeId::of::<ManagementProps>(), "ManagementProps")])
-    // See `WebServer`'s equivalent hooks in `server.rs` for why these two
-    // `expect`s are safe by construction (all `construct` closures run
-    // before any `post_construct`/`pre_destroy` hook).
-    .post_construct(|ctx: &Context| {
-        let me = ctx.get::<ManagementServer>().expect("component was just constructed");
-        if !me.props.enabled {
-            return Box::pin(async move { Ok(()) });
+        if !self.props.enabled {
+            return Ok(());
         }
-        let router = build_management_router(ctx, &me.props);
-        Box::pin(async move { me.start(router?).await })
-    })
-    .pre_destroy(|ctx: &Context| {
-        let me = ctx.get::<ManagementServer>().expect("component exists during shutdown");
-        Box::pin(async move {
-            if !me.props.enabled {
-                return Ok(());
-            }
-            me.stop().await
-        })
-    })
-    .build()
+        self.serving.stop("management server", Duration::from_secs(MANAGEMENT_SHUTDOWN_GRACE_SECONDS)).await
+    }
 }
 
 #[cfg(test)]

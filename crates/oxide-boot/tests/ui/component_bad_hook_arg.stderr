@@ -1,0 +1,7 @@
+error: expected `start(ctx)` (only `ctx` is accepted as a hook argument), e.g. `post_construct = start(ctx)`
+ --> tests/ui/component_bad_hook_arg.rs:3:1
+  |
+3 | #[component(post_construct = start(bad))]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

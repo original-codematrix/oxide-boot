@@ -2,7 +2,8 @@
 //! binds a TCP listener, serves an axum `Router`, and shuts down gracefully.
 
 use crate::serve::HttpServing;
-use oxide_core::{ComponentDescriptor, ComponentResult, Context};
+use oxide_boot::component;
+use oxide_core::{ComponentResult, Context};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,26 +90,25 @@ impl Default for ShutdownProps {
 
 /// HTTP server lifecycle component. Binds on `post_construct`, drains and
 /// shuts down on `pre_destroy`.
+///
+/// `serving` and `readiness` are `#[default]`-constructed (an unbound
+/// `HttpServing`, readiness `false`) rather than derived from `props` at
+/// construction time: `props.address`/`props.port`/`props.shutdown_grace_seconds`
+/// are only needed inside `start`/`stop_server`, which now take them as
+/// parameters read from `self.props` — see `HttpServing`'s doc comment in
+/// `serve.rs`. `post_construct` needs the assembled `&Context` (to build
+/// the router from every registered route), so it's declared
+/// `start(ctx)`.
+#[component(post_construct = start(ctx), pre_destroy = stop_server)]
 pub struct WebServer {
+    props: ServerProps,
+    #[default]
     readiness: Arc<AtomicBool>,
-    readiness_grace: std::time::Duration,
+    #[default]
     serving: HttpServing,
 }
 
 impl WebServer {
-    fn new(props: ServerProps) -> Self {
-        Self {
-            readiness: Arc::new(AtomicBool::new(false)),
-            readiness_grace: std::time::Duration::from_secs(props.shutdown.readiness_grace_seconds),
-            serving: HttpServing::new(
-                props.address,
-                props.port,
-                "HTTP server",
-                std::time::Duration::from_secs(props.shutdown_grace_seconds),
-            ),
-        }
-    }
-
     /// The bound local address, once the server has started. `None` before
     /// `post_construct` runs or after `pre_destroy` has torn it down.
     pub fn local_addr(&self) -> Option<SocketAddr> {
@@ -120,8 +120,9 @@ impl WebServer {
         Arc::clone(&self.readiness)
     }
 
-    async fn start(&self, router: axum::Router) -> ComponentResult<()> {
-        self.serving.start(router).await?;
+    async fn start(&self, ctx: &Context) -> ComponentResult<()> {
+        let router = crate::routing::build_router(ctx)?;
+        self.serving.start(&self.props.address, self.props.port, "HTTP server", router).await?;
         self.readiness.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -130,40 +131,12 @@ impl WebServer {
         // Flip readiness DOWN and give a load balancer time to notice before
         // the drain begins refusing new connections.
         self.readiness.store(false, Ordering::SeqCst);
-        if !self.readiness_grace.is_zero() {
-            tokio::time::sleep(self.readiness_grace).await;
+        let readiness_grace = std::time::Duration::from_secs(self.props.shutdown.readiness_grace_seconds);
+        if !readiness_grace.is_zero() {
+            tokio::time::sleep(readiness_grace).await;
         }
-        self.serving.stop().await
+        self.serving.stop("HTTP server", std::time::Duration::from_secs(self.props.shutdown_grace_seconds)).await
     }
-}
-
-inventory::submit! {
-    ComponentDescriptor::builder(
-        "WebServer",
-        std::any::TypeId::of::<WebServer>,
-        |b| {
-            let props = b.resolve::<ServerProps>()?;
-            b.insert(WebServer::new((*props).clone()));
-            Ok(())
-        },
-    )
-    .deps(|| vec![(std::any::TypeId::of::<ServerProps>(), "ServerProps")])
-    // Both `expect`s below are safe by construction: `assemble` runs every
-    // component's `construct` closure to completion before any
-    // `post_construct` hook runs, so `WebServer` is already in the context
-    // by the time its own `post_construct` fires. `pre_destroy` only ever
-    // runs (via `Application::stop`/rollback) over components whose
-    // `construct` already succeeded, for the same reason.
-    .post_construct(|ctx: &Context| {
-        let me = ctx.get::<WebServer>().expect("component was just constructed");
-        let router = crate::routing::build_router(ctx);
-        Box::pin(async move { me.start(router?).await })
-    })
-    .pre_destroy(|ctx: &Context| {
-        let me = ctx.get::<WebServer>().expect("component exists during shutdown");
-        Box::pin(async move { me.stop_server().await })
-    })
-    .build()
 }
 
 #[cfg(test)]

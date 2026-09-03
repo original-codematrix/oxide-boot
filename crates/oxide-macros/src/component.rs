@@ -4,24 +4,69 @@ use syn::{Field, Fields, Ident, ItemStruct, parse::Parser};
 
 pub struct ComponentArgs {
     pub post_construct: Option<Ident>,
+    /// Whether `post_construct`'s method takes `(&Context)`, written
+    /// `post_construct = method(ctx)` — see [`parse_hook_value`].
+    pub post_construct_with_ctx: bool,
     pub pre_destroy: Option<Ident>,
+    /// Whether `pre_destroy`'s method takes `(&Context)`, written
+    /// `pre_destroy = method(ctx)` — see [`parse_hook_value`].
+    pub pre_destroy_with_ctx: bool,
     /// Shutdown slot, same semantics as `ComponentDescriptor::destroy_order`
     /// (see `oxide_core::container`): defaults to `0`, the framework's
     /// normal-component default, when the argument is absent.
     pub destroy_order: i32,
 }
 
+/// Parses a `post_construct`/`pre_destroy` value: either a bare method name
+/// (`start`), or a method name followed by a parenthesized `ctx` marker
+/// (`start(ctx)`) requesting the assembled `&Context` as that method's one
+/// argument. The marker is needed because the macro only sees the struct,
+/// not the method's real signature, so it cannot infer whether the method
+/// wants `(&self)` or `(&self, &Context)` — the generated hook closure has
+/// to know which shape to call before the method itself is even resolved.
+fn parse_hook_value(input: syn::parse::ParseStream) -> syn::Result<(Ident, bool)> {
+    let method: Ident = input.parse()?;
+    if !input.peek(syn::token::Paren) {
+        return Ok((method, false));
+    }
+    let content;
+    syn::parenthesized!(content in input);
+    let bad_arg = || {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            format!(
+                "expected `{method}(ctx)` (only `ctx` is accepted as a hook argument), e.g. `post_construct = {method}(ctx)`"
+            ),
+        )
+    };
+    let arg: Ident = content.parse().map_err(|_| bad_arg())?;
+    if arg != "ctx" || !content.is_empty() {
+        return Err(bad_arg());
+    }
+    Ok((method, true))
+}
+
 pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
-    let mut out = ComponentArgs { post_construct: None, pre_destroy: None, destroy_order: 0 };
+    let mut out = ComponentArgs {
+        post_construct: None,
+        post_construct_with_ctx: false,
+        pre_destroy: None,
+        pre_destroy_with_ctx: false,
+        destroy_order: 0,
+    };
     if args.is_empty() {
         return Ok(out);
     }
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("post_construct") {
-            out.post_construct = Some(meta.value()?.parse()?);
+            let (method, with_ctx) = parse_hook_value(meta.value()?)?;
+            out.post_construct = Some(method);
+            out.post_construct_with_ctx = with_ctx;
             Ok(())
         } else if meta.path.is_ident("pre_destroy") {
-            out.pre_destroy = Some(meta.value()?.parse()?);
+            let (method, with_ctx) = parse_hook_value(meta.value()?)?;
+            out.pre_destroy = Some(method);
+            out.pre_destroy_with_ctx = with_ctx;
             Ok(())
         } else if meta.path.is_ident("destroy_order") {
             let value = meta.value()?;
@@ -29,10 +74,17 @@ pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
             let lit: syn::LitInt = value
                 .parse()
                 .map_err(|_| meta.error("expected `destroy_order = <integer literal>`, e.g. `destroy_order = -100`"))?;
-            let magnitude: i32 = lit
+            // Parsed as `i64`, sign applied, *then* range-checked against
+            // `i32` — parsing the magnitude straight into `i32` would
+            // reject `i32::MIN` (`-2147483648`): its magnitude,
+            // `2147483648`, overflows `i32` even though the signed value
+            // itself fits exactly.
+            let magnitude: i64 = lit
                 .base10_parse()
                 .map_err(|_| syn::Error::new_spanned(&lit, "`destroy_order` must fit in an `i32`"))?;
-            out.destroy_order = if negative { -magnitude } else { magnitude };
+            let signed = if negative { -magnitude } else { magnitude };
+            out.destroy_order = i32::try_from(signed)
+                .map_err(|_| syn::Error::new_spanned(&lit, "`destroy_order` must fit in an `i32`"))?;
             Ok(())
         } else {
             Err(meta
@@ -86,20 +138,48 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     // `oxide_core::assemble`), so `#ident` is unconditionally already in the
     // context by the time either hook fires. Same pattern as the
     // hand-written component descriptors in oxide-web/oxide-mongo/etc.
+    // Context-aware hooks (`method(ctx)`) clone the `&Context` they're
+    // called with into an owned value before moving it into the `async
+    // move` block: `HookFn`'s future must be `'static` for any input
+    // lifetime, so it cannot borrow the `&Context` argument. `Context`'s
+    // `Clone` is `Arc`-cheap (see its doc comment in `oxide_core::container`)
+    // and this clone lives only in the transient hook future — never stored
+    // in a field, which is the one place that clone would be unsound (an
+    // `Arc` cycle through the context that owns this very component).
     let maybe_post_construct = args.post_construct.as_ref().map(|method| {
-        quote! {
-            .post_construct(|__ctx: &::oxide_boot::__private::Context| {
-                let __me = __ctx.get::<#ident>().expect("component was just constructed");
-                ::std::boxed::Box::pin(async move { __me.#method().await })
-            })
+        if args.post_construct_with_ctx {
+            quote! {
+                .post_construct(|__ctx: &::oxide_boot::__private::Context| {
+                    let __me = __ctx.get::<#ident>().expect("component was just constructed");
+                    let __ctx = ::core::clone::Clone::clone(__ctx);
+                    ::std::boxed::Box::pin(async move { __me.#method(&__ctx).await })
+                })
+            }
+        } else {
+            quote! {
+                .post_construct(|__ctx: &::oxide_boot::__private::Context| {
+                    let __me = __ctx.get::<#ident>().expect("component was just constructed");
+                    ::std::boxed::Box::pin(async move { __me.#method().await })
+                })
+            }
         }
     });
     let maybe_pre_destroy = args.pre_destroy.as_ref().map(|method| {
-        quote! {
-            .pre_destroy(|__ctx: &::oxide_boot::__private::Context| {
-                let __me = __ctx.get::<#ident>().expect("component exists during shutdown");
-                ::std::boxed::Box::pin(async move { __me.#method().await })
-            })
+        if args.pre_destroy_with_ctx {
+            quote! {
+                .pre_destroy(|__ctx: &::oxide_boot::__private::Context| {
+                    let __me = __ctx.get::<#ident>().expect("component exists during shutdown");
+                    let __ctx = ::core::clone::Clone::clone(__ctx);
+                    ::std::boxed::Box::pin(async move { __me.#method(&__ctx).await })
+                })
+            }
+        } else {
+            quote! {
+                .pre_destroy(|__ctx: &::oxide_boot::__private::Context| {
+                    let __me = __ctx.get::<#ident>().expect("component exists during shutdown");
+                    ::std::boxed::Box::pin(async move { __me.#method().await })
+                })
+            }
         }
     });
 

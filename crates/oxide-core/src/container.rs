@@ -173,8 +173,21 @@ impl ContextBuilder {
 }
 
 /// Immutable, fully-wired application context.
+///
+/// `Clone`: the map is `Arc`-wrapped, so cloning is O(1) (one refcount bump,
+/// not a deep copy) — needed so a context-aware `#[component]` hook (see
+/// `oxide_macros::component`) can be handed an owned `Context` to move into
+/// its `'static` hook future, since `HookFn`'s future cannot borrow the
+/// `&Context` the hook is called with. This clone must stay confined to
+/// that transient future: storing a cloned `Context` in a component's own
+/// *field* would create an `Arc` reference cycle (`Context` owns every
+/// component, so a component owning a clone of `Context` owns itself,
+/// transitively) and leak the whole context forever. Nothing in this crate
+/// or the macro does that — the only clone site is the momentary one inside
+/// a hook's future.
+#[derive(Clone)]
 pub struct Context {
-    map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    map: Arc<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 }
 
 impl Context {
@@ -255,7 +268,7 @@ pub fn assemble(
         (d.construct)(&mut seed)?;
     }
 
-    Ok((Context { map: seed.map }, order))
+    Ok((Context { map: Arc::new(seed.map) }, order))
 }
 
 #[cfg(test)]

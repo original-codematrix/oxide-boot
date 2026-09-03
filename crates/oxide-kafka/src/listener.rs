@@ -360,9 +360,7 @@ fn resolve_group_id(ctx: &Context, descriptor: &ListenerDescriptor) -> String {
     if let Some(g) = descriptor.group_id {
         return g.to_string();
     }
-    ctx.get::<AppConfig>()
-        .and_then(|c| c.get_opt::<String>("oxide.application.name").ok().flatten())
-        .unwrap_or_else(|| "oxide-app".to_string())
+    ctx.get::<AppConfig>().and_then(|c| c.application_name().ok()).unwrap_or_else(|| "oxide-app".to_string())
 }
 
 /// Builds a consumer for a single listener descriptor and subscribes it.
