@@ -13,6 +13,7 @@ struct User {
     email: String,
     status: String,
     age: i32,
+    name: String,
 }
 
 #[allow(dead_code)]
@@ -30,6 +31,7 @@ trait UserRepository {
     async fn count_by_status(&self, status: String) -> oxide_mongo::Result<u64>;
     async fn find_by_email(&self, email: String) -> oxide_mongo::Result<Vec<User>>;
     async fn find_by_age_greater_than(&self, age: i32) -> oxide_mongo::Result<Vec<User>>;
+    async fn find_all_by_name_like(&self, name: String) -> oxide_mongo::Result<Vec<User>>;
 
     // Escape hatch: raw filter with positional placeholders.
     #[query(filter = r#"{ "status": ?1, "age": { "$gt": ?2 } }"#)]
@@ -37,7 +39,13 @@ trait UserRepository {
 }
 
 fn user(n: i32, status: &str, age: i32) -> User {
-    User { id: ObjectId::new(), email: format!("u{n}@x.com"), status: status.to_string(), age }
+    User {
+        id: ObjectId::new(),
+        email: format!("u{n}@x.com"),
+        status: status.to_string(),
+        age,
+        name: format!("user{n}"),
+    }
 }
 
 // Shared MongoDB container on port 27017 with atexit cleanup.
@@ -141,4 +149,17 @@ async fn repository_crud_and_derived_queries() {
     let deleted = repo.delete_by_id(u2.id).await.expect("delete");
     assert_eq!(deleted, 1);
     assert_eq!(repo.count().await.unwrap(), 2);
+
+    // _like escapes regex metacharacters: a literal "a.*b" name does not
+    // match a document named "axxb" (which a raw, unescaped regex would).
+    let mut regexy = user(4, "active", 22);
+    regexy.name = "a.*b".to_string();
+    repo.save(&regexy).await.expect("save regexy");
+    let mut plain = user(5, "active", 22);
+    plain.name = "axxb".to_string();
+    repo.save(&plain).await.expect("save plain");
+
+    let matches = repo.find_all_by_name_like("a.*b".to_string()).await.expect("like query");
+    assert_eq!(matches.len(), 1, "only the literal match should be found");
+    assert_eq!(matches[0].name, "a.*b");
 }

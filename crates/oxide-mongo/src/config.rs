@@ -180,15 +180,49 @@ pub fn merge(docs: impl IntoIterator<Item = Document>) -> Document {
 /// Builds a Mongo filter document from `(field, operator)` pairs and their
 /// corresponding BSON values (produced by the derived-query macro from the
 /// method name and arguments).
+///
+/// `$null` and `$notnull` are compile-time markers for `_is_null`/
+/// `_is_not_null` conditions: they take no value, so they do not consume an
+/// entry from `values` — every other operator consumes the next one in
+/// order. `$regex` (from `_like`) escapes its value so the caller-supplied
+/// string is matched as a literal substring, never interpreted as a regular
+/// expression.
 pub fn derived_filter(pairs: &[(&str, &str)], values: Vec<Bson>) -> Document {
     let mut out = Document::new();
-    for ((field, op), value) in pairs.iter().zip(values) {
-        if *op == "$eq" {
-            out.insert(*field, value);
-        } else {
-            let mut operator = Document::new();
-            operator.insert(op.to_string(), value);
-            out.insert(*field, operator);
+    let mut values = values.into_iter();
+    for (field, op) in pairs {
+        match *op {
+            "$null" => {
+                out.insert(*field, Bson::Null);
+            }
+            "$notnull" => {
+                let mut operator = Document::new();
+                operator.insert("$ne", Bson::Null);
+                out.insert(*field, operator);
+            }
+            "$eq" => {
+                if let Some(value) = values.next() {
+                    out.insert(*field, value);
+                }
+            }
+            "$regex" => {
+                if let Some(value) = values.next() {
+                    let escaped = match value {
+                        Bson::String(s) => Bson::String(regex::escape(&s)),
+                        other => other,
+                    };
+                    let mut operator = Document::new();
+                    operator.insert("$regex", escaped);
+                    out.insert(*field, operator);
+                }
+            }
+            _ => {
+                if let Some(value) = values.next() {
+                    let mut operator = Document::new();
+                    operator.insert(op.to_string(), value);
+                    out.insert(*field, operator);
+                }
+            }
         }
     }
     out
@@ -207,4 +241,28 @@ pub fn raw_filter(template: &str, values: Vec<Bson>) -> crate::Result<Document> 
     let json: serde_json::Value = serde_json::from_str(&out).map_err(crate::Error::Json)?;
     let bson: Bson = Bson::try_from(json).map_err(crate::Error::ExtJson)?;
     bson.as_document().cloned().ok_or(crate::Error::NotADocument)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn like_escapes_regex_metacharacters() {
+        let d = derived_filter(&[("name", "$regex")], vec![Bson::String("a.*b".into())]);
+        let sub = d.get_document("name").unwrap();
+        assert_eq!(sub.get_str("$regex").unwrap(), regex::escape("a.*b"));
+    }
+
+    #[test]
+    fn is_null_needs_no_argument_and_matches_null() {
+        let d = derived_filter(&[("deleted_at", "$null")], vec![]);
+        assert_eq!(d.get("deleted_at"), Some(&Bson::Null));
+    }
+
+    #[test]
+    fn is_not_null_matches_ne_null() {
+        let d = derived_filter(&[("deleted_at", "$notnull")], vec![]);
+        assert_eq!(d.get_document("deleted_at").unwrap().get("$ne"), Some(&Bson::Null));
+    }
 }

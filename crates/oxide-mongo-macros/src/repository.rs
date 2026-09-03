@@ -133,6 +133,17 @@ fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStr
     };
 
     let conditions = parse_conditions(&cond_rest, sig)?;
+    let expected_args = conditions.iter().filter(|(_, op)| !is_marker_op(op)).count();
+    if args.len() != expected_args {
+        return Err(syn::Error::new_spanned(
+            &sig.ident,
+            format!(
+                "derived query '{method_name}' expects {expected_args} argument(s) matching its field \
+                 conditions (marker conditions like _is_null/_is_not_null take none), found {}",
+                args.len()
+            ),
+        ));
+    }
     let pairs: Vec<TokenStream> = conditions.iter().map(|(f, op)| quote! { (#f, #op) }).collect();
     let bson_args: Vec<TokenStream> = args
         .iter()
@@ -204,8 +215,8 @@ fn parse_field_and_op(field: &str) -> (String, String) {
         ("_less_than_equal", "$lte"),
         ("_greater_than", "$gt"),
         ("_less_than", "$lt"),
-        ("_is_not_null", "$ne"),
-        ("_is_null", "$exists"),
+        ("_is_not_null", "$notnull"),
+        ("_is_null", "$null"),
         ("_in", "$in"),
         ("_not", "$ne"),
         ("_like", "$regex"),
@@ -216,6 +227,12 @@ fn parse_field_and_op(field: &str) -> (String, String) {
         }
     }
     (field.to_string(), "$eq".to_string())
+}
+
+/// `_is_null`/`_is_not_null` are marker operators: `derived_filter` fills
+/// them in without a value, so they must not consume a method argument.
+fn is_marker_op(op: &str) -> bool {
+    op == "$null" || op == "$notnull"
 }
 
 fn expand_query_method(attrs: &[Attribute], sig: &Signature) -> Result<TokenStream> {

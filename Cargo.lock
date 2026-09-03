@@ -2414,6 +2414,7 @@ dependencies = [
  "oxide-core",
  "oxide-mongo-macros",
  "oxide-web",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

@@ -19,6 +19,7 @@ tracing.workspace = true
 metrics.workspace = true
 inventory.workspace = true
 futures.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 testcontainers.workspace = true

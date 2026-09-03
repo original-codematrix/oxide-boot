@@ -43,6 +43,7 @@ oxide-client-macros = { path = "crates/oxide-client-macros", version = "0.1.0" }
 oxide-test = { path = "crates/oxide-test", version = "0.1.0" }
 oxide-test-macros = { path = "crates/oxide-test-macros", version = "0.1.0" }
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio"] }
+regex = "1"
 testcontainers = "0.28"
 axum = "0.8"
 mongodb = "3.8"
