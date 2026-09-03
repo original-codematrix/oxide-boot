@@ -33,6 +33,8 @@ pub enum Error {
     ExtJson(#[from] mongodb::bson::extjson::de::Error),
     #[error("the #[query] filter did not parse into a Mongo document")]
     NotADocument,
+    #[error("#[query] filter references placeholder ?{index} but no matching argument was given")]
+    Placeholder { index: usize },
     #[error("mongo client has not been started yet (post_construct has not run)")]
     NotStarted,
 }

@@ -231,12 +231,34 @@ pub fn derived_filter(pairs: &[(&str, &str)], values: Vec<Bson>) -> Document {
 /// Builds a raw Mongo filter from a `#[query(filter = "...")]` template with
 /// `?1`/`?2`/... positional placeholders substituted by the method arguments
 /// (rendered as extended JSON), then parsed into a `Document`.
+///
+/// The template is scanned once, left to right: on `?` all following digits
+/// are read as a single placeholder index and the rendered value is written
+/// straight to the output, so `?1` never matches inside `?10`, and a
+/// substituted value that itself contains something like `?2` is never
+/// substituted again.
 pub fn raw_filter(template: &str, values: Vec<Bson>) -> crate::Result<Document> {
-    let mut out = template.to_string();
-    for (i, value) in values.iter().enumerate() {
-        let placeholder = format!("?{}", i + 1);
-        let rendered = serde_json::to_string(value).map_err(crate::Error::Json)?;
-        out = out.replace(&placeholder, &rendered);
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::with_capacity(template.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '?' {
+            let start = i + 1;
+            let mut end = start;
+            while end < chars.len() && chars[end].is_ascii_digit() {
+                end += 1;
+            }
+            if end > start {
+                let index: usize = chars[start..end].iter().collect::<String>().parse().expect("digits only");
+                let value = values.get(index - 1).ok_or(crate::Error::Placeholder { index })?;
+                let rendered = serde_json::to_string(value).map_err(crate::Error::Json)?;
+                out.push_str(&rendered);
+                i = end;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
     }
     let json: serde_json::Value = serde_json::from_str(&out).map_err(crate::Error::Json)?;
     let bson: Bson = Bson::try_from(json).map_err(crate::Error::ExtJson)?;
@@ -264,5 +286,26 @@ mod tests {
     fn is_not_null_matches_ne_null() {
         let d = derived_filter(&[("deleted_at", "$notnull")], vec![]);
         assert_eq!(d.get_document("deleted_at").unwrap().get("$ne"), Some(&Bson::Null));
+    }
+
+    #[test]
+    fn placeholder_ten_is_not_matched_by_placeholder_one() {
+        let values: Vec<Bson> = (1..=10).map(Bson::Int32).collect();
+        let d = raw_filter(r#"{ "a": ?1, "b": ?10 }"#, values).unwrap();
+        assert_eq!(d.get("a"), Some(&Bson::Int32(1)));
+        assert_eq!(d.get("b"), Some(&Bson::Int32(10)));
+    }
+
+    #[test]
+    fn substituted_values_are_not_substituted_again() {
+        let d =
+            raw_filter(r#"{ "a": ?1, "b": ?2 }"#, vec![Bson::String("?2".into()), Bson::String("x".into())]).unwrap();
+        assert_eq!(d.get_str("a").unwrap(), "?2");
+        assert_eq!(d.get_str("b").unwrap(), "x");
+    }
+
+    #[test]
+    fn missing_argument_for_placeholder_is_an_error() {
+        assert!(raw_filter(r#"{ "a": ?2 }"#, vec![Bson::Int32(1)]).is_err());
     }
 }
