@@ -22,6 +22,9 @@ fn default_backoff_initial_ms() -> u64 {
 fn default_backoff_multiplier() -> f64 {
     2.0
 }
+fn default_max_backoff_millis() -> u64 {
+    30_000
+}
 fn default_idempotence() -> bool {
     true
 }
@@ -42,6 +45,11 @@ pub struct RetryProps {
     pub backoff_initial_ms: u64,
     #[serde(default = "default_backoff_multiplier")]
     pub backoff_multiplier: f64,
+    /// Upper bound on any single backoff sleep, regardless of how large the
+    /// geometric growth would otherwise make it — binds automatically from
+    /// `max-backoff-millis` via `rename_all = "kebab-case"`.
+    #[serde(default = "default_max_backoff_millis")]
+    pub max_backoff_millis: u64,
     /// Whether to publish exhausted records to `<topic>.DLT` before committing.
     #[serde(default = "default_dlt_enabled")]
     pub dlt_enabled: bool,
@@ -57,6 +65,7 @@ impl Default for RetryProps {
             max_attempts: default_max_attempts(),
             backoff_initial_ms: default_backoff_initial_ms(),
             backoff_multiplier: default_backoff_multiplier(),
+            max_backoff_millis: default_max_backoff_millis(),
             dlt_enabled: default_dlt_enabled(),
         }
     }
@@ -159,6 +168,7 @@ mod tests {
         assert_eq!(c.retry.max_attempts, 3);
         assert_eq!(c.retry.backoff_initial_ms, 100);
         assert_eq!(c.retry.backoff_multiplier, 2.0);
+        assert_eq!(c.retry.max_backoff_millis, 30_000);
         assert!(c.retry.dlt_enabled);
         assert_eq!(c.shutdown_timeout_seconds, 30);
         assert_eq!(c.shutdown_timeout(), std::time::Duration::from_secs(30));
@@ -172,13 +182,23 @@ mod tests {
     #[test]
     fn retry_props_bind_documented_kebab_keys() {
         let props: RetryProps = serde_json::from_str(
-            r#"{"max-attempts": 7, "backoff-initial-ms": 250, "backoff-multiplier": 3.5, "dlt-enabled": false}"#,
+            r#"{"max-attempts": 7, "backoff-initial-ms": 250, "backoff-multiplier": 3.5, "max-backoff-millis": 12000, "dlt-enabled": false}"#,
         )
         .unwrap();
         assert_eq!(props.max_attempts, 7);
         assert_eq!(props.backoff_initial_ms, 250);
         assert_eq!(props.backoff_multiplier, 3.5);
+        assert_eq!(props.max_backoff_millis, 12000);
         assert!(!props.dlt_enabled);
+    }
+
+    /// `max_backoff_millis` binds from `max-backoff-millis` purely via
+    /// `rename_all = "kebab-case"` — no per-field `#[serde(rename = ...)]`
+    /// is needed (Task 13b's contract for new fields).
+    #[test]
+    fn retry_props_max_backoff_millis_binds_via_rename_all() {
+        let props: RetryProps = serde_json::from_str(r#"{"max-backoff-millis": 5000}"#).unwrap();
+        assert_eq!(props.max_backoff_millis, 5000);
     }
 
     #[test]

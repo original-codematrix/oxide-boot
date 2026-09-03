@@ -46,6 +46,7 @@ pub enum KafkaError {
 /// Internal paths used by macro-generated code. Not part of the public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::retry::{HandlerError, mark_poison_pill};
     pub use inventory;
     pub use oxide_core::Context;
     pub use serde::Deserialize;

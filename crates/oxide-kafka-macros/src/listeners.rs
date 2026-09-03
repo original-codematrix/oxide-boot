@@ -171,12 +171,21 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                                         ::oxide_kafka::__private::Deserialize::deserialize(
                                             &mut ::oxide_kafka::__private::Deserializer::from_slice(&__msg.payload),
                                         )
-                                        .map_err(|e| ::std::format!("deserialize: {e}"))?;
+                                        // A malformed payload is a poison
+                                        // pill: it will never deserialize no
+                                        // matter how many times it's
+                                        // retried, so mark it as such —
+                                        // `run_with_retry` skips the retry
+                                        // loop entirely for this marker and
+                                        // goes straight to the DLT.
+                                        .map_err(|e| ::oxide_kafka::__private::mark_poison_pill(::std::format!("deserialize: {e}")))?;
                                     #key_arg
                                     #headers_arg
                                     __this.#method_ident(#payload_destruct #(, #call_args)*)
                                         .await
-                                        .map_err(|e| ::std::format!("{e}"))
+                                        .map_err(|e| {
+                                            ::oxide_kafka::__private::HandlerError::Handler(::std::format!("{e}"))
+                                        })
                                 })
                             })
                         )

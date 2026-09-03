@@ -67,8 +67,16 @@ pub struct MessageKey(pub Option<String>);
 pub struct MessageHeaders(pub Vec<(String, Vec<u8>)>);
 
 /// A boxed listener handler closure, resolved once for a component handle.
-pub type PreparedListener =
-    Box<dyn Fn(ReceivedMessage) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
+/// Its error type is [`crate::retry::HandlerError`] rather than a plain
+/// `String`: this is how macro-generated code around JSON deserialization
+/// signals a poison pill to `run_with_retry` — as a distinct enum variant,
+/// never as a magic string the user handler's own error message could
+/// (however implausibly) collide with.
+pub type PreparedListener = Box<
+    dyn Fn(ReceivedMessage) -> Pin<Box<dyn Future<Output = Result<(), crate::retry::HandlerError>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Shared runtime infrastructure handed to a listener's `start` fn.
 pub struct ListenerInfra {}
@@ -685,11 +693,21 @@ async fn run_with_retry(
                 outcome = Ok(());
                 break;
             }
-            Err(e) => {
+            // A poison pill (payload the handler could never deserialize)
+            // never succeeds on retry — it's pure latency and log noise to
+            // retry it like a transient failure. Skip straight to the
+            // terminal outcome (→ DLT) after this single attempt. This is a
+            // distinct enum variant, not a string pattern, so a handler's own
+            // error can never be misclassified as a poison pill.
+            Err(crate::retry::HandlerError::PoisonPill(message)) => {
+                outcome = Err(message);
+                break;
+            }
+            Err(crate::retry::HandlerError::Handler(message)) => {
                 if attempts > 1 {
                     metrics::counter!("kafka_listener_retries_total", "topic" => topic.to_string(), "group" => group.to_string()).increment(1);
                 }
-                outcome = Err(e.clone());
+                outcome = Err(message);
             }
         }
     }
