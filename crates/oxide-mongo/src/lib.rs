@@ -35,6 +35,8 @@ pub enum Error {
     NotADocument,
     #[error("#[query] filter references placeholder ?{index} but no matching argument was given")]
     Placeholder { index: usize },
+    #[error("#[query] filter placeholder '?{digits}' is not a valid index")]
+    InvalidPlaceholder { digits: String },
     #[error("mongo client has not been started yet (post_construct has not run)")]
     NotStarted,
 }

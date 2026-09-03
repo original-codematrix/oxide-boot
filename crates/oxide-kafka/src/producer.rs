@@ -28,16 +28,33 @@ pub struct KafkaProducer {
     producer: FutureProducer,
 }
 
+/// Bound on the boot-time broker-reachability check in [`KafkaProducer::new`].
+/// `fetch_metadata` is a blocking librdkafka call; this keeps a permanently
+/// unreachable `bootstrap.servers` from stalling boot indefinitely while
+/// still tolerating an ordinary broker's normal metadata-response latency.
+const METADATA_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
 impl KafkaProducer {
-    fn new(props: &KafkaProps) -> Self {
+    fn new(props: &KafkaProps) -> Result<Self, KafkaError> {
         let config = props.client_config(&[
             ("enable.idempotence", props.producer.idempotence.to_string()),
             // Idempotent producers internally retry on transient errors; cap
             // the retry count at librdkafka's maximum.
             ("message.send.max.retries", "2147483647".to_string()),
         ]);
-        let producer: FutureProducer = config.create().expect("build kafka producer");
-        Self { producer }
+        let producer: FutureProducer = config.create().map_err(|source| KafkaError::Client { source })?;
+        // `create()` only builds the client handle — librdkafka connects
+        // lazily in the background, so an unreachable `bootstrap.servers`
+        // would otherwise go unnoticed until the first send/consume, well
+        // after boot reported success. A synchronous metadata fetch forces
+        // (and bounds) that first connection attempt here, so a
+        // misconfigured or unreachable broker fails boot instead of being
+        // logged-and-retried forever by a listener supervisor.
+        producer
+            .client()
+            .fetch_metadata(None, Timeout::After(METADATA_FETCH_TIMEOUT))
+            .map_err(|source| KafkaError::Client { source })?;
+        Ok(Self { producer })
     }
 
     /// Serializes `value` as JSON and sends it with a string key.
@@ -110,12 +127,19 @@ inventory::submit! {
         std::any::TypeId::of::<KafkaProducer>,
         |b| {
             let props = b.resolve::<KafkaProps>()?;
-            let me = KafkaProducer::new(&props);
+            let me = KafkaProducer::new(&props).map_err(|e| oxide_core::ContextError::Construct {
+                type_name: "KafkaProducer",
+                message: e.to_string(),
+            })?;
             b.insert(me);
             Ok(())
         },
     )
     .deps(|| vec![(std::any::TypeId::of::<KafkaProps>(), "KafkaProps")])
+    // Safe by construction: `assemble` runs every component's `construct`
+    // closure (including this one, right above) before any `pre_destroy`
+    // hook runs, so `KafkaProducer` is unconditionally already in the
+    // context by the time this fires.
     .pre_destroy(|ctx: &Context| {
         let me = ctx.get::<KafkaProducer>().expect("KafkaProducer exists during shutdown");
         // Flush remaining messages out before the process tears down. Runs at

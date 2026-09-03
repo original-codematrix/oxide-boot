@@ -36,6 +36,11 @@ pub enum KafkaError {
     },
     #[error("kafka error: {0}")]
     Other(String),
+    #[error("failed to build kafka client: {source}")]
+    Client {
+        #[source]
+        source: rdkafka::error::KafkaError,
+    },
 }
 
 /// Internal paths used by macro-generated code. Not part of the public API.

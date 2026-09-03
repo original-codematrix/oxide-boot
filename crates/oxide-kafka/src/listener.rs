@@ -161,7 +161,7 @@ fn build_consumer(
     props: &KafkaProps,
     group: &str,
     offset_reset: &str,
-) -> Arc<StreamConsumer<crate::observe::StatsContext>> {
+) -> Result<Arc<StreamConsumer<crate::observe::StatsContext>>, KafkaError> {
     let config = props.client_config(&[
         ("group.id", group.to_string()),
         ("enable.auto.commit", "false".to_string()),
@@ -170,8 +170,8 @@ fn build_consumer(
     ]);
     let context = crate::observe::StatsContext { group: group.to_string() };
     let consumer: StreamConsumer<crate::observe::StatsContext> =
-        config.create_with_context(context).expect("build stream consumer");
-    Arc::new(consumer)
+        config.create_with_context(context).map_err(|source| KafkaError::Client { source })?;
+    Ok(Arc::new(consumer))
 }
 
 /// Runs one listener: polls the consumer and routes messages to on-demand
@@ -251,6 +251,10 @@ async fn partition_worker(
     producer: Inject<KafkaProducer>,
 ) {
     while let Some(msg) = rx.recv().await {
+        // `Semaphore::acquire` only errors once `close()` has been called on
+        // it; this semaphore is created fresh per supervisor
+        // (`supervised_loop`) and nothing in this crate ever closes it, so
+        // the `Err` arm is unreachable in practice.
         let _permit = semaphore.acquire().await.expect("semaphore not closed");
         let received = msg.into_received();
         let topic = received.topic.clone();
@@ -411,7 +415,14 @@ inventory::submit! {
                 let mut runs = Vec::new();
                 let retry = props.consumer.retry.clone();
                 for (descriptor, handler, group) in listeners {
-                    let consumer = build_consumer(&props, &group, &props.consumer.auto_offset_reset);
+                    // A broker-connectivity/config problem here (e.g. an
+                    // unreachable `bootstrap.servers`) is a boot-time
+                    // failure, not a recoverable per-listener condition, so
+                    // it propagates out of `post_construct` as a
+                    // `ContextError::Construct` (via the `?` on the
+                    // `KafkaError` -> boxed-error conversion) rather than
+                    // being logged-and-skipped like a subscribe failure.
+                    let consumer = build_consumer(&props, &group, &props.consumer.auto_offset_reset)?;
                     if let Err(e) = consumer.subscribe(&[descriptor.topic]) {
                         tracing::error!(error = %e, topic = descriptor.topic, "listener subscribe failed");
                         continue;
@@ -435,14 +446,22 @@ inventory::submit! {
                         name: descriptor.listener_name,
                     });
                 }
-                *me.runs.lock().expect("manager runs lock") = runs;
+                // Recover from a poisoned lock rather than panicking a second
+                // time on top of whatever earlier panic poisoned it — the
+                // Mutex only ever guards a plain `Vec`, so there is no
+                // invariant to lose by taking the (possibly stale) inner
+                // value.
+                *me.runs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = runs;
                 Ok(())
             }),
         }
     })
+    // Safe by construction: `assemble` runs every component's `construct`
+    // closure before any `pre_destroy` hook runs, so `KafkaListenerManager`
+    // is unconditionally already in the context by the time this fires.
     .pre_destroy(|ctx: &Context| {
         let me = ctx.get::<KafkaListenerManager>().expect("component exists during shutdown");
-        let runs = std::mem::take(&mut *me.runs.lock().expect("manager runs lock"));
+        let runs = std::mem::take(&mut *me.runs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
         Box::pin(async move {
             for run in runs {
                 run.cancellation.cancel();

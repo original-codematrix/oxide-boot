@@ -180,6 +180,10 @@ inventory::submit! {
             Ok(())
         },
     )
+    // Safe by construction: `assemble` runs every component's `construct`
+    // closure (including this one, right above) before any `pre_destroy`
+    // hook runs, so `OtelLifecycle` is unconditionally already in the
+    // context by the time this fires.
     .pre_destroy(|ctx: &Context| {
         let me = ctx.get::<OtelLifecycle>().expect("component exists during shutdown");
         Box::pin(async move { me.flush().await })

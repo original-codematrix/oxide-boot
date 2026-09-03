@@ -95,12 +95,20 @@ inventory::submit! {
         "MongoClient",
         std::any::TypeId::of::<MongoClient>,
         |b| {
-            let props = b.resolve::<MongoProps>().expect("MongoProps resolved");
+            // `?` rather than `expect`: `resolve` returning `Err` here would
+            // mean the `deps` declaration below and `assemble`'s dependency
+            // check disagree, which should surface as a `ContextError`
+            // (this closure's own return type), not panic.
+            let props = b.resolve::<MongoProps>()?;
             b.insert(MongoClient::new(props.uri.clone(), props.database.clone()));
             Ok(())
         },
     )
     .deps(|| vec![(std::any::TypeId::of::<MongoProps>(), "MongoProps")])
+    // Safe by construction: `assemble` runs every component's `construct`
+    // closure (including this one, right above) before any `post_construct`
+    // hook runs, so both `MongoClient` and `MongoProps` are unconditionally
+    // already in the context by the time this fires.
     .post_construct(|ctx: &Context| {
         let client = ctx.get::<MongoClient>().expect("MongoClient exists");
         let props = ctx.get::<MongoProps>().expect("MongoProps exists").clone();
@@ -276,7 +284,14 @@ pub fn raw_filter(template: &str, values: Vec<Bson>) -> crate::Result<Document> 
                 end += 1;
             }
             if end > start {
-                let index: usize = chars[start..end].iter().collect::<String>().parse().expect("digits only");
+                let digits: String = chars[start..end].iter().collect();
+                // The scan above only ever collects ASCII digits into
+                // `digits`, so this can only fail on integer overflow (an
+                // implausibly long digit run) — a real, if unlikely,
+                // request-time input rather than a startup invariant, so it
+                // is surfaced as an error instead of panicking the caller.
+                let index: usize =
+                    digits.parse().map_err(|_| crate::Error::InvalidPlaceholder { digits: digits.clone() })?;
                 let value = values.get(index - 1).ok_or(crate::Error::Placeholder { index })?;
                 let rendered = serde_json::to_string(value).map_err(crate::Error::Json)?;
                 out.push_str(&rendered);

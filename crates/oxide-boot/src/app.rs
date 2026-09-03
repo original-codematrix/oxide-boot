@@ -18,6 +18,8 @@ pub enum BootError {
     PreDestroy { component: &'static str, message: String },
     #[error("logging initialization failed: {message}")]
     Logging { message: String },
+    #[error("failed to install signal handler: {message}")]
+    Signal { message: String },
 }
 
 pub struct OxideApplication;
@@ -65,7 +67,17 @@ impl AppBuilder {
     /// via `tracing::error!` but do not change the returned `BootError` —
     /// the caller always sees the original `post_construct` failure.
     pub async fn start(self) -> Result<Application, BootError> {
-        let env = self.env.unwrap_or_else(|| std::env::vars().collect());
+        // `vars_os()` + lossy conversion: `std::env::vars()` panics outright
+        // if any process environment variable is not valid UTF-8. A value
+        // that only vars_os() can represent losslessly can never match an
+        // env-binding key anyway (config keys are ASCII), so lossy
+        // conversion is safe here and keeps boot from aborting on an
+        // unrelated non-UTF-8 variable elsewhere in the environment.
+        let env = self.env.unwrap_or_else(|| {
+            std::env::vars_os()
+                .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+                .collect()
+        });
         let config = AppConfig::load(&self.base_dir, &env)?;
         crate::logging::run_highest_priority(&config)?;
         let name: String = config.get_opt("oxide.application.name")?.unwrap_or_else(|| "oxide-app".into());
@@ -146,7 +158,7 @@ impl Application {
         #[cfg(unix)]
         {
             let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("install SIGTERM handler");
+                .map_err(|e| BootError::Signal { message: e.to_string() })?;
             tokio::select! {
                 _ = ctrl_c => {},
                 _ = sigterm.recv() => {},

@@ -66,6 +66,15 @@ pub(crate) fn apply(router: Router, request_timeout_seconds: u64, max_body_bytes
 inventory::submit! {
     crate::routing::RouterLayer {
         name: "oxide-web/hardening",
+        // `RouterLayer::apply` returns `Router`, not `Result<Router>` — there
+        // is no error channel to propagate into. The `expect` below is safe
+        // by construction, not merely by convention: `assemble` runs every
+        // component's `construct` closure (which is where `ServerProps`,
+        // itself a `#[derive(ConfigProperties)]` component, gets inserted)
+        // before *any* `post_construct` hook runs, and this layer is only
+        // ever invoked from `WebServer`'s `post_construct` (via
+        // `routing::build_router`). So by the time this closure runs,
+        // `ServerProps` construction has unconditionally already happened.
         apply: |ctx, router| {
             let props = ctx.get::<crate::server::ServerProps>().expect("ServerProps is always seeded before WebServer boots");
             apply(router, props.request_timeout_seconds, props.max_body_bytes, &props.cors)

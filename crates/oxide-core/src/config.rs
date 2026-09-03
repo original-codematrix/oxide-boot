@@ -164,6 +164,8 @@ fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
             if take == segments.len() {
                 map.insert(key, value);
             } else {
+                // `key` came from `map.keys().find(...)` on this same `map`
+                // two lines above, so `map.get_mut(&key)` cannot miss.
                 set_relaxed(map.get_mut(&key).expect("key just found"), &segments[take..], value);
             }
             return;
@@ -177,6 +179,8 @@ fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
         if map.get(&head).is_none() {
             map.insert(head.clone(), Value::Mapping(Default::default()));
         }
+        // `head` is now guaranteed present: either it already existed, or
+        // the `insert` two lines above just put it there.
         set_relaxed(map.get_mut(&head).expect("just inserted"), &segments[1..], value);
     }
 }
@@ -210,6 +214,8 @@ fn set_existing(node: &mut Value, segments: &[String], value: Value, depth: usiz
                 map.insert(key, value);
                 return true;
             }
+            // Same reasoning as in `set_relaxed`: `key` was just found via
+            // `map.keys().find(...)` on this same `map`.
             let child = map.get_mut(&key).expect("key just found");
             return set_existing(child, &segments[take..], value, depth + 1);
         }

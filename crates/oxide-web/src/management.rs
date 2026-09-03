@@ -189,6 +189,9 @@ fn build_management_router(ctx: &Context, props: &ManagementProps) -> Result<Rou
     }
 
     if is_exposed(exposure, "info") {
+        // `AppConfig` is inserted directly into the seed `ContextBuilder` in
+        // `AppBuilder::start`, before `assemble` even runs — it is present
+        // in every context, unconditionally, for the lifetime of the app.
         let config = ctx.get::<AppConfig>().expect("AppConfig is always seeded by OxideApplication");
         router = router.route(
             "/actuator/info",
@@ -260,6 +263,9 @@ inventory::submit! {
         },
     )
     .deps(|| vec![(std::any::TypeId::of::<ManagementProps>(), "ManagementProps")])
+    // See `WebServer`'s equivalent hooks in `server.rs` for why these two
+    // `expect`s are safe by construction (all `construct` closures run
+    // before any `post_construct`/`pre_destroy` hook).
     .post_construct(|ctx: &Context| {
         let me = ctx.get::<ManagementServer>().expect("component was just constructed");
         if !me.props.enabled {

@@ -142,6 +142,19 @@ impl ContextBuilder {
         Self::default()
     }
 
+    /// Inserts `value`, keyed by `TypeId::of::<T>()`.
+    ///
+    /// **Invariant, not enforced here:** inserting the same `T` twice
+    /// silently overwrites the first value. This is safe in practice because
+    /// the realistic source of a duplicate — two [`ComponentDescriptor`]s
+    /// registered for the same type — is already rejected earlier, in
+    /// [`assemble`]'s dedup-by-`type_id` pass (`ContextError::Duplicate`,
+    /// covered by the `duplicate_registration_is_an_error` test below),
+    /// before any `construct` closure (and therefore any `insert`) runs.
+    /// `insert` itself stays infallible so every `construct` closure across
+    /// the workspace (hand-written and macro-generated) doesn't need to
+    /// thread a `Result` through a call that, given that upstream guarantee,
+    /// cannot observe a real collision.
     pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) {
         self.map.insert(TypeId::of::<T>(), Arc::new(value));
     }

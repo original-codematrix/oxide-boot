@@ -125,8 +125,14 @@ struct HeaderCarrier<'a>(&'a mut reqwest::header::HeaderMap);
 
 impl opentelemetry::propagation::Injector for HeaderCarrier<'_> {
     fn set(&mut self, key: &str, value: String) {
-        if let Ok(k) = reqwest::header::HeaderName::from_bytes(key.as_bytes()) {
-            self.0.insert(k, reqwest::header::HeaderValue::from_str(&value).expect("header value"));
+        // `opentelemetry::propagation::Injector::set` has no error channel
+        // (it returns `()`); mirror the existing key-parse handling below
+        // and simply skip a value the propagator produced that somehow
+        // isn't a valid header value, rather than panicking a request.
+        if let Ok(k) = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            && let Ok(v) = reqwest::header::HeaderValue::from_str(&value)
+        {
+            self.0.insert(k, v);
         }
     }
 }

@@ -144,6 +144,12 @@ inventory::submit! {
         },
     )
     .deps(|| vec![(std::any::TypeId::of::<ServerProps>(), "ServerProps")])
+    // Both `expect`s below are safe by construction: `assemble` runs every
+    // component's `construct` closure to completion before any
+    // `post_construct` hook runs, so `WebServer` is already in the context
+    // by the time its own `post_construct` fires. `pre_destroy` only ever
+    // runs (via `Application::stop`/rollback) over components whose
+    // `construct` already succeeded, for the same reason.
     .post_construct(|ctx: &Context| {
         let me = ctx.get::<WebServer>().expect("component was just constructed");
         let router = crate::routing::build_router(ctx);

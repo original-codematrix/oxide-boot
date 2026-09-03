@@ -46,6 +46,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let mut deps = Vec::new();
     let mut constructors = Vec::new();
     for field in fields.named.iter_mut() {
+        // Unreachable: `fields` was destructured from `Fields::Named` above,
+        // so every field here has an ident by definition. Also compile-time
+        // only (macro expansion) — a panic here fails the build with a
+        // (less friendly) message, it can never reach a running program.
         let name = field.ident.clone().expect("named field");
         let ty = field.ty.clone();
         if has_default_attr(field) {
@@ -60,6 +64,12 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     }
 
+    // Generated `expect`s below are safe by construction, at runtime: the
+    // core assembler runs every component's `construct` closure to
+    // completion before any `post_construct`/`pre_destroy` hook runs (see
+    // `oxide_core::assemble`), so `#ident` is unconditionally already in the
+    // context by the time either hook fires. Same pattern as the
+    // hand-written component descriptors in oxide-web/oxide-mongo/etc.
     let maybe_post_construct = args.post_construct.as_ref().map(|method| {
         quote! {
             .post_construct(|__ctx: &::oxide_boot::__private::Context| {

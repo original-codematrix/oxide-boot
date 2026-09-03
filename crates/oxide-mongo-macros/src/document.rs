@@ -31,6 +31,10 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let mut field_names: Vec<String> = Vec::new();
     let mut indexes: Vec<TokenStream> = Vec::new();
     for field in &fields.named {
+        // Unreachable: `fields` was destructured from `Fields::Named` above,
+        // so every field here has an ident by definition. Also compile-time
+        // only (macro expansion) — a panic here fails the build, it can
+        // never reach a running program.
         let fname = field.ident.as_ref().expect("named field");
         field_names.push(fname.to_string());
         for attr in &field.attrs {

@@ -11,6 +11,14 @@ pub fn expand(item: TokenStream) -> syn::Result<TokenStream> {
     let output = &func.sig.output;
     Ok(quote! {
         fn main() #output {
+            // `main`'s return type is whatever the user's async fn declared
+            // (`()`, `Result<_, _>`, ...), so there is no way to construct an
+            // error value of an arbitrary caller-chosen type here — there is
+            // no error channel to propagate a runtime-build failure into.
+            // Matches `#[tokio::main]`'s own generated code, which does the
+            // same. Failure here means the OS refused to create the async
+            // runtime's worker threads, which is not a recoverable condition
+            // for this process anyway.
             ::oxide_boot::__private::tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()

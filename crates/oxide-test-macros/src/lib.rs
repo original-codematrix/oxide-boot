@@ -52,6 +52,10 @@ fn expand(item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStrea
         None => quote! {},
     };
 
+    // The three `expect`s below run inside a generated `#[test]` fn body,
+    // not application/runtime code — panicking IS the correct, intended
+    // failure signal for a test (that's how `#[test]` reports failure), so
+    // these are deliberately left as `expect` rather than converted.
     Ok(quote! {
         #(#attrs)*
         #[::core::prelude::v1::test]
