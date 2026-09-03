@@ -105,6 +105,50 @@ impl NotesController {
 
 Run the example: `cd examples/rest-api && cargo run`
 
+Both HTTP servers are configurable:
+
+```yaml
+oxide:
+  server:
+    address: 0.0.0.0                 # main app server bind address
+    port: 8080
+    request-timeout-seconds: 30      # a slow request gets 503, not a hang
+    max-body-bytes: 2097152          # 2 MiB; an oversized body gets 413
+    cors:
+      allowed-origins: []            # non-empty enables CORS; empty (default) leaves it off
+    shutdown:
+      readiness-grace-seconds: 0     # opt-in pause between readiness DOWN and drain start
+  management:
+    address: 0.0.0.0                 # management server bind address
+    port: 8081
+    request-timeout-seconds: 30
+    max-body-bytes: 2097152
+    cors:
+      allowed-origins: []
+    endpoints:
+      exposure: "health,info"        # comma-separated, or "*" for everything
+    health:
+      cache-ttl-millis: 1000         # how long a health check result is reused
+      show-details: "never"          # "always" to include indicator detail text
+```
+
+`oxide.management.endpoints.exposure` defaults to `"health,info"` —
+**`/actuator/prometheus` is opt-in**, not mounted unless you add
+`prometheus` to the list (or use `"*"`). This matters if you're upgrading
+from an earlier version where every management route was always on: add
+`prometheus` to `exposure` or your scrape target starts 404ing.
+
+`oxide.management.health.show-details` only recognizes the exact strings
+`"never"` and `"always"`; anything else (including a typo) is treated as
+`"never"`, so `DOWN` indicator detail (which can carry driver internals
+like Mongo/Kafka host names) stays hidden by default and on misconfiguration.
+
+`oxide.server.shutdown.readiness-grace-seconds` should stay well below
+`oxide.server.shutdown-grace-seconds` — the grace period runs *before* the
+drain starts, so a grace period close to (or larger than) the drain budget
+leaves little or no time to actually drain in-flight connections, and
+`stop()` now returns an error when the drain is aborted.
+
 ## Observability (oxide-observability)
 
 Add `oxide-observability` as a dependency **and** force the crate to be
@@ -140,7 +184,9 @@ metrics::counter!("notes_created_total").increment(1);
 Everything — automatic and custom metrics alike — is exposed on
 `/actuator/prometheus`, served on the **management port** (default `8081`,
 separate from the main application port) alongside `/actuator/health` and
-`/actuator/info`.
+`/actuator/info` — but only once `prometheus` is added to
+`oxide.management.endpoints.exposure` (default `"health,info"`; see the Web
+section above). Without it the route isn't mounted at all.
 
 Distributed tracing activates the moment `oxide.otel.endpoint` is
 configured: spans export over OTLP, W3C `traceparent`/`tracestate` headers
@@ -291,6 +337,13 @@ trait UserRepository {
     async fn count_by_status(&self, status: String) -> oxide_mongo::Result<u64>;
     async fn find_by_age_greater_than(&self, age: i32) -> oxide_mongo::Result<Vec<User>>;
 
+    // `_like` matches a "contains" substring; the argument is escaped so it's
+    // never interpreted as a regular expression. `_is_null`/`_is_not_null`
+    // take NO method argument — they compile to a fixed `$null`/`{$ne: null}`
+    // check.
+    async fn find_all_by_email_like(&self, fragment: String) -> oxide_mongo::Result<Vec<User>>;
+    async fn find_all_by_email_is_null(&self) -> oxide_mongo::Result<Vec<User>>;
+
     // Escape hatch for anything special.
     #[query(filter = r#"{ "status": ?1, "age": { "$gt": ?2 } }"#)]
     async fn find_special(&self, status: String, min_age: i32) -> oxide_mongo::Result<Vec<User>>;
@@ -339,7 +392,22 @@ resolves from `oxide.clients.billing.url`. Each call:
 - records an `http_client_requests_seconds{client, method, status, uri}`
   histogram,
 - maps non-2xx responses to a typed `ClientError::Http { status, body }`
-  (RFC 7807 bodies left in `body`).
+  (RFC 7807 bodies left in `body`),
+- percent-encodes every `Path<T>` value before interpolating it into the
+  route template, so a value can't inject an extra path segment or a query
+  string.
+
+Each client gets its own connect/request timeouts, under
+`oxide.clients.<name>`:
+
+```yaml
+oxide:
+  clients:
+    billing:
+      url: "http://localhost:9000"
+      connect-timeout-seconds: 5     # default
+      request-timeout-seconds: 30    # default
+```
 
 Run the example end-to-end:
 ```sh
@@ -354,7 +422,7 @@ cargo test -p http-client        # boots an in-process server and calls the clie
 | `@PathVariable String id` | `id: Path<String>` |
 | `@RequestBody X body` | `body: Json<X>` |
 | `FeignException` / `ResponseEntity` | `ClientError::Http { status, body }` |
-| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (timeout/retry props are on the phase-4c backlog) |
+| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (connect/request timeouts configurable; retry is on the phase-4c backlog) |
 
 ## Tests (oxide-test)
 
@@ -428,6 +496,16 @@ you do write in YAML wins over the seeded default. For properties without
 app-level kebab-case keys you define yourself outside `oxide:`, the original
 rule still applies as stated above: the section must already exist in YAML
 for a multi-segment env var to bind to a hyphenated leaf inside it.
+
+An env var's raw value is parsed as YAML, not just taken as a string:
+`OXIDE_SERVER_PORT=9090` becomes the number `9090`, `OXIDE_FEATURE_ENABLED=true`
+becomes a bool, and a bound key isn't limited to a scalar either —
+`OXIDE_SERVER_CORS_ALLOWED_ORIGINS='["https://a.example","https://b.example"]'`
+sets a list (`oxide.server.cors.allowed-origins` already exists as a seeded
+default, so this matches rule 1 above), and flow-style YAML mappings work
+the same way for a key that accepts one. A value that doesn't parse as YAML
+(most ordinary strings, e.g. a bare hostname) falls back to a plain string,
+so no extra quoting is needed for the common case.
 
 ## Spring-to-Oxide cheat sheet
 
