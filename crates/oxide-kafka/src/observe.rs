@@ -57,33 +57,6 @@ pub fn extract_traceparent(headers: &[(String, Vec<u8>)]) -> Context {
     opentelemetry::global::get_text_map_propagator(|prop| prop.extract_with_context(&Context::current(), &carrier))
 }
 
-/// A consumer `ClientContext` that turns rdkafka's periodic statistics into
-/// per-partition `kafka_consumer_lag` gauges. Requires the consumer to set
-/// `statistics.interval.ms` (the manager does). `group` is carried for the
-/// metric label since the Statistics payload has no group id.
-#[derive(Debug, Clone)]
-pub struct StatsContext {
-    pub group: String,
-}
-
-impl rdkafka::client::ClientContext for StatsContext {
-    fn stats(&self, statistics: rdkafka::statistics::Statistics) {
-        for (topic, topic_stats) in &statistics.topics {
-            for (partition, partition_stats) in &topic_stats.partitions {
-                metrics::gauge!(
-                    "kafka_consumer_lag",
-                    "topic" => topic.clone(),
-                    "partition" => partition.to_string(),
-                    "group" => self.group.clone(),
-                )
-                .set(partition_stats.consumer_lag as f64);
-            }
-        }
-    }
-}
-
-impl rdkafka::consumer::ConsumerContext for StatsContext {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
