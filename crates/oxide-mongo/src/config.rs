@@ -10,6 +10,7 @@ use std::sync::{Arc, OnceLock};
 /// (integration starter: missing section ⇒ fail-fast).
 #[derive(Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.mongo")]
+#[serde(rename_all = "kebab-case")]
 pub struct MongoProps {
     #[serde(rename = "uri")]
     pub uri: String,
@@ -349,6 +350,13 @@ mod tests {
     #[test]
     fn missing_argument_for_placeholder_is_an_error() {
         assert!(raw_filter(r#"{ "a": ?2 }"#, vec![Bson::Int32(1)]).is_err());
+    }
+
+    #[test]
+    fn mongo_props_bind_documented_kebab_keys() {
+        let props: MongoProps =
+            serde_json::from_str(r#"{"uri": "mongodb://localhost:27017", "ping-on-start": false}"#).unwrap();
+        assert!(!props.ping_on_start);
     }
 
     #[test]

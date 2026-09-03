@@ -31,6 +31,7 @@ fn default_shutdown_timeout_seconds() -> u64 {
 
 /// Retry / dead-letter configuration for the listener machinery.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct RetryProps {
     /// Total attempts including the first. `3` = one initial try plus two
     /// retries. Consumers block on a failing record until it succeeds or the
@@ -63,6 +64,7 @@ impl Default for RetryProps {
 
 /// Consumer-side listener tuning.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct ConsumerProps {
     #[serde(default = "default_auto_offset_reset")]
     pub auto_offset_reset: String,
@@ -75,7 +77,7 @@ pub struct ConsumerProps {
     /// How long `pre_destroy` waits for in-flight partition workers to
     /// finish (and commit their offsets) before giving up and continuing
     /// shutdown anyway.
-    #[serde(default = "default_shutdown_timeout_seconds", rename = "shutdown-timeout-seconds")]
+    #[serde(default = "default_shutdown_timeout_seconds")]
     pub shutdown_timeout_seconds: u64,
 }
 
@@ -98,6 +100,7 @@ impl Default for ConsumerProps {
 
 /// Producer-side tuning.
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct ProducerProps {
     #[serde(default = "default_idempotence")]
     pub idempotence: bool,
@@ -112,6 +115,7 @@ impl Default for ProducerProps {
 /// Parsed `oxide.kafka` configuration. `bootstrap_servers` is required.
 #[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.kafka")]
+#[serde(rename_all = "kebab-case")]
 pub struct KafkaProps {
     #[serde(rename = "bootstrap-servers")]
     pub bootstrap_servers: String,
@@ -163,6 +167,34 @@ mod tests {
     #[test]
     fn producer_props_default_idempotent() {
         assert!(ProducerProps::default().idempotence);
+    }
+
+    #[test]
+    fn retry_props_bind_documented_kebab_keys() {
+        let props: RetryProps = serde_json::from_str(
+            r#"{"max-attempts": 7, "backoff-initial-ms": 250, "backoff-multiplier": 3.5, "dlt-enabled": false}"#,
+        )
+        .unwrap();
+        assert_eq!(props.max_attempts, 7);
+        assert_eq!(props.backoff_initial_ms, 250);
+        assert_eq!(props.backoff_multiplier, 3.5);
+        assert!(!props.dlt_enabled);
+    }
+
+    #[test]
+    fn consumer_props_bind_documented_kebab_keys() {
+        let props: ConsumerProps = serde_json::from_str(r#"{"auto-offset-reset": "latest"}"#).unwrap();
+        assert_eq!(props.auto_offset_reset, "latest");
+    }
+
+    /// `shutdown_timeout_seconds`'s explicit `#[serde(rename = "...")]` was
+    /// removed as redundant now that `ConsumerProps` carries
+    /// `rename_all = "kebab-case"`; this proves the documented key still
+    /// binds via `rename_all` alone.
+    #[test]
+    fn consumer_props_shutdown_timeout_still_binds_via_rename_all() {
+        let props: ConsumerProps = serde_json::from_str(r#"{"shutdown-timeout-seconds": 45}"#).unwrap();
+        assert_eq!(props.shutdown_timeout_seconds, 45);
     }
 
     #[test]
