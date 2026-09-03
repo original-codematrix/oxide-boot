@@ -55,8 +55,9 @@ from YAML — see "Environment overrides" below.
 ## Development
 
 Toolchain: Rust **1.88+** (`rust-version` in `Cargo.toml`); `rust-toolchain.toml`
-selects the current stable with `rustfmt` and `clippy`. `Cargo.lock` is tracked so
-builds and security scans are reproducible.
+pins an explicit stable version (with `rustfmt` and `clippy`) so local builds and
+CI use the same compiler. `Cargo.lock` is tracked so builds and security scans
+are reproducible.
 
 One-time setup for the security tooling:
 
@@ -71,6 +72,13 @@ running Docker daemon; they pin host ports `9092` and `27017`.
 make ci       # everything below
 make check    # fmt --check, clippy -D warnings, cargo test --workspace
 make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
+make msrv     # cargo +1.88 check --workspace --all-targets, against the declared MSRV
+```
+
+`make msrv` needs the 1.88 toolchain installed once:
+
+```sh
+rustup toolchain install 1.88
 ```
 
 Policy lives in `deny.toml`: RUSTSEC advisories fail the build, licenses must be
