@@ -208,7 +208,10 @@ pub fn merge(docs: impl IntoIterator<Item = Document>) -> Document {
 /// entry from `values` — every other operator consumes the next one in
 /// order. `$regex` (from `_like`) escapes its value so the caller-supplied
 /// string is matched as a literal substring, never interpreted as a regular
-/// expression.
+/// expression. The escape only applies to a `Bson::String` value; the
+/// generated macro code only ever produces `$regex` conditions from string
+/// arguments, but a direct caller passing another `Bson` variant here
+/// bypasses escaping.
 pub fn derived_filter(pairs: &[(&str, &str)], values: Vec<Bson>) -> Document {
     let mut out = Document::new();
     let mut values = values.into_iter();
@@ -258,7 +261,9 @@ pub fn derived_filter(pairs: &[(&str, &str)], values: Vec<Bson>) -> Document {
 /// are read as a single placeholder index and the rendered value is written
 /// straight to the output, so `?1` never matches inside `?10`, and a
 /// substituted value that itself contains something like `?2` is never
-/// substituted again.
+/// substituted again. The scan does not track JSON string-literal
+/// boundaries, so a `?`-plus-digits run that happens to sit inside a quoted
+/// string in the template is still treated as a placeholder.
 pub fn raw_filter(template: &str, values: Vec<Bson>) -> crate::Result<Document> {
     let chars: Vec<char> = template.chars().collect();
     let mut out = String::with_capacity(template.len());
@@ -337,5 +342,19 @@ mod tests {
         let rendered = format!("{props:?}");
         assert!(!rendered.contains("secret"), "credentials leaked: {rendered}");
         assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn marker_first_does_not_shift_the_following_value_argument() {
+        let d = derived_filter(&[("deleted_at", "$null"), ("status", "$eq")], vec![Bson::String("active".into())]);
+        assert_eq!(d.get("deleted_at"), Some(&Bson::Null));
+        assert_eq!(d.get_str("status").unwrap(), "active");
+    }
+
+    #[test]
+    fn marker_second_does_not_consume_the_preceding_value_argument() {
+        let d = derived_filter(&[("status", "$eq"), ("deleted_at", "$null")], vec![Bson::String("active".into())]);
+        assert_eq!(d.get_str("status").unwrap(), "active");
+        assert_eq!(d.get("deleted_at"), Some(&Bson::Null));
     }
 }

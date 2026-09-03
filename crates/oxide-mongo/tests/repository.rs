@@ -14,6 +14,8 @@ struct User {
     status: String,
     age: i32,
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deleted_at: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -32,6 +34,10 @@ trait UserRepository {
     async fn find_by_email(&self, email: String) -> oxide_mongo::Result<Vec<User>>;
     async fn find_by_age_greater_than(&self, age: i32) -> oxide_mongo::Result<Vec<User>>;
     async fn find_all_by_name_like(&self, name: String) -> oxide_mongo::Result<Vec<User>>;
+    // Mixed marker + value condition: verifies the argument-to-field
+    // alignment when `_is_null` (a no-argument marker) is combined with a
+    // regular value condition in the same derived query.
+    async fn find_all_by_status_and_deleted_at_is_null(&self, status: String) -> oxide_mongo::Result<Vec<User>>;
 
     // Escape hatch: raw filter with positional placeholders.
     #[query(filter = r#"{ "status": ?1, "age": { "$gt": ?2 } }"#)]
@@ -45,6 +51,7 @@ fn user(n: i32, status: &str, age: i32) -> User {
         status: status.to_string(),
         age,
         name: format!("user{n}"),
+        deleted_at: None,
     }
 }
 
@@ -162,4 +169,21 @@ async fn repository_crud_and_derived_queries() {
     let matches = repo.find_all_by_name_like("a.*b".to_string()).await.expect("like query");
     assert_eq!(matches.len(), 1, "only the literal match should be found");
     assert_eq!(matches[0].name, "a.*b");
+
+    // Mixed marker + value condition: status = "active" AND deleted_at is
+    // null. Of the active users seeded above (u1, u3, regexy, plain), mark
+    // one as soft-deleted so the query must exclude it by both conditions,
+    // not just one — an off-by-one in the argument-to-field alignment would
+    // either bind "active" to the wrong field or miscount the marker.
+    let mut soft_deleted = user(6, "active", 22);
+    soft_deleted.deleted_at = Some("2026-01-01".to_string());
+    repo.save(&soft_deleted).await.expect("save soft-deleted");
+    let mut inactive_live = user(7, "inactive", 22);
+    inactive_live.deleted_at = None;
+    repo.save(&inactive_live).await.expect("save inactive live");
+
+    let live_active = repo.find_all_by_status_and_deleted_at_is_null("active".to_string()).await.expect("mixed query");
+    assert_eq!(live_active.len(), 4, "active and not soft-deleted");
+    assert!(live_active.iter().all(|u| u.status == "active" && u.deleted_at.is_none()));
+    assert!(!live_active.iter().any(|u| u.id == soft_deleted.id), "soft-deleted must be excluded");
 }
