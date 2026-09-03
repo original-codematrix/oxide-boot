@@ -191,7 +191,10 @@ section above). Without it the route isn't mounted at all.
 Distributed tracing activates the moment `oxide.otel.endpoint` is
 configured: spans export over OTLP, W3C `traceparent`/`tracestate` headers
 propagate context across service calls, and sampling is parent-based,
-controlled via `oxide.otel.sample-ratio`.
+controlled via `oxide.otel.sample-ratio`. On shutdown the tracer provider is
+flushed with a bounded wait, `oxide.otel.shutdown-timeout-seconds` (default
+`10`) — a hung or unreachable collector logs a warning and lets shutdown
+continue rather than hanging it.
 
 Run the example: `cd examples/rest-api && cargo run`, then
 `curl http://localhost:8081/actuator/prometheus`.

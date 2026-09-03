@@ -55,11 +55,27 @@ pub struct OtelProps {
     // would always fall back to its default.
     #[serde(rename = "sample-ratio", default = "default_sample_ratio")]
     pub sample_ratio: f64,
+    // Same kebab-case rationale as `sample_ratio` above. Bounds the blocking
+    // `TracerProvider::shutdown()` call in `OtelLifecycle::flush` — without
+    // it, a hung or unreachable OTLP collector would block application
+    // shutdown indefinitely, and `OtelLifecycle` is deliberately ordered
+    // last (`destroy_order(100)`), so everything else has already stopped
+    // by the time that wait would happen.
+    #[serde(rename = "shutdown-timeout-seconds", default = "default_shutdown_timeout_seconds")]
+    pub shutdown_timeout_seconds: u64,
+}
+
+fn default_shutdown_timeout_seconds() -> u64 {
+    10
 }
 
 impl Default for OtelProps {
     fn default() -> Self {
-        Self { endpoint: None, sample_ratio: default_sample_ratio() }
+        Self {
+            endpoint: None,
+            sample_ratio: default_sample_ratio(),
+            shutdown_timeout_seconds: default_shutdown_timeout_seconds(),
+        }
     }
 }
 
@@ -165,9 +181,33 @@ impl OtelLifecycle {
     /// test]`-default) runtime and deadlock. `spawn_blocking` moves the
     /// blocking wait to a dedicated thread, leaving the async worker free to
     /// keep driving the background task.
-    async fn flush(&self) -> oxide_core::ComponentResult<()> {
-        tokio::task::spawn_blocking(shutdown).await??;
-        Ok(())
+    ///
+    /// The blocking wait is additionally bounded by
+    /// `oxide.otel.shutdown-timeout-seconds` (default 10) via
+    /// `tokio::time::timeout`: a hung or unreachable OTLP collector must
+    /// never block application shutdown. On timeout this logs a warning
+    /// naming the endpoint and the configured timeout, then returns `Ok(())`
+    /// — shutdown continues either way, it never hangs and never fails
+    /// `stop()`.
+    async fn flush(&self, config: &AppConfig) -> oxide_core::ComponentResult<()> {
+        let props: OtelProps = config.get_opt("oxide.otel")?.unwrap_or_default();
+        let timeout = std::time::Duration::from_secs(props.shutdown_timeout_seconds);
+
+        match tokio::time::timeout(timeout, tokio::task::spawn_blocking(shutdown)).await {
+            Ok(join_result) => {
+                join_result??;
+                Ok(())
+            }
+            Err(_) => {
+                let endpoint = props.endpoint.as_deref().unwrap_or("<unconfigured>");
+                tracing::warn!(
+                    endpoint,
+                    timeout_seconds = props.shutdown_timeout_seconds,
+                    "OTel tracer provider shutdown did not complete within the configured timeout; continuing shutdown"
+                );
+                Ok(())
+            }
+        }
     }
 }
 
@@ -186,7 +226,11 @@ inventory::submit! {
     // context by the time this fires.
     .pre_destroy(|ctx: &Context| {
         let me = ctx.get::<OtelLifecycle>().expect("component exists during shutdown");
-        Box::pin(async move { me.flush().await })
+        // `AppConfig` is inserted directly into the seed `ContextBuilder` in
+        // `AppBuilder::start`, before `assemble` even runs — it is present
+        // in every context, unconditionally, for the lifetime of the app.
+        let config = ctx.get::<AppConfig>().expect("AppConfig is always seeded by OxideApplication");
+        Box::pin(async move { me.flush(&config).await })
     })
     .destroy_order(100)
     .build()
@@ -259,6 +303,40 @@ pub mod testing {
         super::install(provider);
         exporter
     }
+
+    /// Wraps `InMemorySpanExporter` but makes `shutdown()` block for `delay`
+    /// (a real, synchronous `std::thread::sleep`, matching how a hung OTLP
+    /// collector would block the real exporter's `shutdown()`). Used by
+    /// `tests/otel_shutdown_timeout.rs` to prove `OtelLifecycle::flush`
+    /// bounds that wait with `oxide.otel.shutdown-timeout-seconds` instead
+    /// of hanging application shutdown indefinitely.
+    #[derive(Clone, Debug)]
+    struct HungShutdown(InMemorySpanExporter, std::time::Duration);
+
+    impl SpanExporter for HungShutdown {
+        fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
+            self.0.export(batch)
+        }
+
+        fn shutdown(&mut self) {
+            std::thread::sleep(self.1);
+        }
+
+        fn set_resource(&mut self, resource: &Resource) {
+            self.0.set_resource(resource);
+        }
+    }
+
+    /// Installs a tracer provider whose exporter's `shutdown()` blocks for
+    /// `delay` before returning, simulating a hung/unreachable OTLP
+    /// collector. Call this BEFORE booting the app, same as
+    /// [`install_in_memory`].
+    pub fn install_in_memory_with_hung_shutdown(delay: std::time::Duration) -> InMemorySpanExporter {
+        let exporter = InMemorySpanExporter::default();
+        let provider = super::build_provider(HungShutdown(exporter.clone(), delay), "otel-test".into(), 1.0);
+        super::install(provider);
+        exporter
+    }
 }
 
 #[cfg(test)]
@@ -270,6 +348,7 @@ mod tests {
         let props = OtelProps::default();
         assert_eq!(props.endpoint, None);
         assert_eq!(props.sample_ratio, 1.0);
+        assert_eq!(props.shutdown_timeout_seconds, 10);
     }
 
     #[test]
@@ -277,6 +356,14 @@ mod tests {
         let props: OtelProps = serde_json::from_str("{}").expect("empty object should deserialize with defaults");
         assert_eq!(props.endpoint, None);
         assert_eq!(props.sample_ratio, 1.0);
+        assert_eq!(props.shutdown_timeout_seconds, 10);
+    }
+
+    #[test]
+    fn otel_props_deserialize_reads_kebab_case_shutdown_timeout_seconds_key() {
+        let props: OtelProps =
+            serde_json::from_str(r#"{"shutdown-timeout-seconds": 3}"#).expect("kebab key should bind");
+        assert_eq!(props.shutdown_timeout_seconds, 3);
     }
 
     #[test]
