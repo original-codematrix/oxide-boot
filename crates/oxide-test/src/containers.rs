@@ -67,23 +67,23 @@
 //!
 //! A `reuse`-flagged container is explicitly exempt from testcontainers'
 //! Ryuk/Drop cleanup — that's the point, it's meant to survive the process
-//! that created it — so `oxide-test-redpanda` / `oxide-test-mongo` keep
-//! running after the test binaries exit, ready for the next run instead of
+//! that created it — so `oxide-test-redpanda`, `oxide-test-mongo` and
+//! `oxide-test-dragonfly` keep running after the test binaries exit, ready for the next run instead of
 //! paying the container-start cost again. This is the same pattern this
 //! repo's local dev support containers already use (`docker-tracing-1`,
 //! `docker-cache-1`, both left running across sessions). Remove them
 //! manually when you want a clean slate or want the memory back:
 //!
 //! ```sh
-//! docker rm -f oxide-test-redpanda oxide-test-mongo
+//! docker rm -f oxide-test-redpanda oxide-test-mongo oxide-test-dragonfly
 //! ```
 //!
-//! Both names are unique to this fixture (nothing else in this repo creates
+//! All three names are unique to this fixture (nothing else in this repo creates
 //! containers by those names), so a stale one is always either exactly what
 //! the next run wants (still healthy — `is_running` is checked and it's
 //! restarted if not, matching testcontainers' own reuse behaviour) or safe
 //! to remove with the command above if you suspect it's wedged; a wedged
-//! container simply fails the readiness wait inside `redpanda()`/`mongo()`
+//! container simply fails the readiness wait inside the fixture
 //! with a panic pointing at the same fix.
 //!
 //! Mongo needs none of the advertised-address handling Redpanda does — a
@@ -104,10 +104,14 @@ const REDPANDA_PORT: u16 = 9092;
 /// The fixed host port every process maps Mongo's listener to.
 const MONGO_PORT: u16 = 27017;
 
+/// The fixed host port every process maps Dragonfly's listener to.
+const DRAGONFLY_PORT: u16 = 6379;
+
 /// The fixed name both fixtures reuse each other (and future runs) by. See
 /// module docs for the reuse-matching mechanics and the cleanup trade-off.
 const REDPANDA_CONTAINER_NAME: &str = "oxide-test-redpanda";
 const MONGO_CONTAINER_NAME: &str = "oxide-test-mongo";
+const DRAGONFLY_CONTAINER_NAME: &str = "oxide-test-dragonfly";
 
 /// A running fixture container's connection info. Cheap to clone — the
 /// actual `ContainerAsync` stays behind the process-wide static and is never
@@ -129,6 +133,7 @@ struct Fixture {
 
 static REDPANDA: OnceCell<Fixture> = OnceCell::const_new();
 static MONGO: OnceCell<Fixture> = OnceCell::const_new();
+static DRAGONFLY: OnceCell<Fixture> = OnceCell::const_new();
 
 /// Starts (or, per `ReuseDirective::Always`, attaches to) a `GenericImage`,
 /// retrying a few times on failure: two processes racing to create the same
@@ -255,6 +260,45 @@ pub async fn mongo() -> ContainerHandle {
             };
             let node = start_with_retry(build, "mongo").await;
             Fixture { _container: node, endpoint: format!("mongodb://localhost:{MONGO_PORT}") }
+        })
+        .await;
+    ContainerHandle { endpoint: fixture.endpoint.clone() }
+}
+
+/// Starts or attaches to (once per process; reused across processes — see
+/// module docs) the shared Dragonfly container on the fixed host port 6379.
+/// Dragonfly speaks the Redis protocol, so this is what the `oxide-redis`
+/// starter is tested against. Returns the connection URL
+/// ("redis://127.0.0.1:6379"). Must be awaited from within a tokio runtime.
+pub async fn dragonfly() -> ContainerHandle {
+    let fixture = DRAGONFLY
+        .get_or_init(|| async {
+            let build = || {
+                GenericImage::new("docker.dragonflydb.io/dragonflydb/dragonfly", "v1.23.2")
+                    .with_mapped_port(DRAGONFLY_PORT, 6379.tcp())
+                    // Dragonfly refuses to start under the default Docker
+                    // Desktop limits unless told it may run without
+                    // `--memory` cgroup headroom for its io_uring pools.
+                    .with_cmd(["dragonfly", "--logtostderr", "--default_lua_flags=allow-undeclared-keys"])
+                    .with_container_name(DRAGONFLY_CONTAINER_NAME)
+                    .with_reuse(ReuseDirective::Always)
+            };
+            let node = start_with_retry(build, "dragonfly").await;
+            let endpoint = format!("redis://127.0.0.1:{DRAGONFLY_PORT}");
+            // Like Mongo, the container can accept TCP before the server
+            // answers commands, so wait for an actual PING round-trip.
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", DRAGONFLY_PORT)).await.is_ok() {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "dragonfly at {endpoint} did not accept connections within 60s"
+                );
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Fixture { _container: node, endpoint }
         })
         .await;
     ContainerHandle { endpoint: fixture.endpoint.clone() }

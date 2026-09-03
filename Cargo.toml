@@ -11,6 +11,7 @@ members = [
     "crates/oxide-kafka-macros",
     "crates/oxide-mongo",
     "crates/oxide-mongo-macros",
+    "crates/oxide-redis",
     "crates/oxide-client",
     "crates/oxide-client-macros",
     "crates/oxide-test",
@@ -41,6 +42,7 @@ oxide-kafka = { path = "crates/oxide-kafka", version = "0.1.0" }
 oxide-kafka-macros = { path = "crates/oxide-kafka-macros", version = "0.1.0" }
 oxide-mongo = { path = "crates/oxide-mongo", version = "0.1.0" }
 oxide-mongo-macros = { path = "crates/oxide-mongo-macros", version = "0.1.0" }
+oxide-redis = { path = "crates/oxide-redis", version = "0.1.0" }
 oxide-client = { path = "crates/oxide-client", version = "0.1.0" }
 oxide-client-macros = { path = "crates/oxide-client-macros", version = "0.1.0" }
 oxide-test = { path = "crates/oxide-test", version = "0.1.0" }
@@ -68,6 +70,7 @@ quote = "1"
 proc-macro2 = "1"
 trybuild = "1"
 tempfile = "3"
+redis = { version = "1", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 opentelemetry = "0.32"
