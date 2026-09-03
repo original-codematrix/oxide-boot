@@ -4,7 +4,9 @@
 //! and whatever else registers a [`ManagementRoute`]) off the application's
 //! main port.
 
+use crate::hardening::CorsProps;
 use crate::serve::HttpServing;
+use crate::server::{default_max_body_bytes, default_request_timeout_seconds};
 use crate::{WebError, health};
 use axum::{Json, Router};
 use oxide_core::{AppConfig, ComponentDescriptor, ComponentResult, Context};
@@ -42,6 +44,12 @@ pub struct ManagementProps {
     pub enabled: bool,
     #[serde(rename = "endpoints", default)]
     pub endpoints: EndpointsProps,
+    #[serde(rename = "request-timeout-seconds", default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+    #[serde(rename = "max-body-bytes", default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(rename = "cors", default)]
+    pub cors: CorsProps,
 }
 
 impl Default for ManagementProps {
@@ -51,6 +59,9 @@ impl Default for ManagementProps {
             port: default_port(),
             enabled: default_enabled(),
             endpoints: EndpointsProps::default(),
+            request_timeout_seconds: default_request_timeout_seconds(),
+            max_body_bytes: default_max_body_bytes(),
+            cors: CorsProps::default(),
         }
     }
 }
@@ -123,7 +134,8 @@ async fn info(config: oxide_core::Inject<AppConfig>) -> Json<serde_json::Value> 
 /// Assembles the management router: health (readiness-aware if a
 /// `WebServer` is in the context, liveness-only otherwise) + `/actuator/info`
 /// + all registered `ManagementRoute`s.
-fn build_management_router(ctx: &Context, exposure: &str) -> Result<Router, WebError> {
+fn build_management_router(ctx: &Context, props: &ManagementProps) -> Result<Router, WebError> {
+    let exposure = &props.endpoints.exposure;
     let mut router = Router::new();
     if is_exposed(exposure, "health") {
         router = router.merge(match ctx.get::<crate::server::WebServer>() {
@@ -154,7 +166,7 @@ fn build_management_router(ctx: &Context, exposure: &str) -> Result<Router, WebE
         tracing::info!(path = route.path, "management route mounted");
     }
 
-    Ok(router)
+    Ok(crate::hardening::apply(router, props.request_timeout_seconds, props.max_body_bytes, &props.cors))
 }
 
 /// Second HTTP server lifecycle component, listening on `oxide.management.port`
@@ -209,7 +221,7 @@ inventory::submit! {
         if !me.props.enabled {
             return Box::pin(async move { Ok(()) });
         }
-        let router = build_management_router(ctx, &me.props.endpoints.exposure);
+        let router = build_management_router(ctx, &me.props);
         Box::pin(async move { me.start(router?).await })
     })
     .pre_destroy(|ctx: &Context| {

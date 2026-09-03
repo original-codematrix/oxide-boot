@@ -70,6 +70,6 @@ impl opentelemetry::propagation::Extractor for HeaderCarrier<'_> {
 inventory::submit! {
     oxide_web::RouterLayer {
         name: "oxide-observability/http",
-        apply: |router| router.layer(oxide_web::__private::axum::middleware::from_fn(crate::http::observe)),
+        apply: |_ctx, router| router.layer(oxide_web::__private::axum::middleware::from_fn(crate::http::observe)),
     }
 }

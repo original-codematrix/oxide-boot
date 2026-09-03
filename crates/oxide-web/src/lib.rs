@@ -2,6 +2,7 @@
 //! error responses, and an HTTP server wired into the boot lifecycle.
 
 pub mod error;
+mod hardening;
 mod health;
 pub mod management;
 pub mod routing;

@@ -16,6 +16,12 @@ fn default_grace() -> u64 {
 fn default_address() -> String {
     "0.0.0.0".to_string()
 }
+pub(crate) fn default_request_timeout_seconds() -> u64 {
+    30
+}
+pub(crate) fn default_max_body_bytes() -> usize {
+    2 * 1024 * 1024
+}
 
 /// Configuration bound to the `oxide.server` prefix. The section may be
 /// absent entirely (falls back to `Default`).
@@ -28,11 +34,24 @@ pub struct ServerProps {
     pub port: u16,
     #[serde(rename = "shutdown-grace-seconds", default = "default_grace")]
     pub shutdown_grace_seconds: u64,
+    #[serde(rename = "request-timeout-seconds", default = "default_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+    #[serde(rename = "max-body-bytes", default = "default_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(rename = "cors", default)]
+    pub cors: crate::hardening::CorsProps,
 }
 
 impl Default for ServerProps {
     fn default() -> Self {
-        Self { address: default_address(), port: default_port(), shutdown_grace_seconds: default_grace() }
+        Self {
+            address: default_address(),
+            port: default_port(),
+            shutdown_grace_seconds: default_grace(),
+            request_timeout_seconds: default_request_timeout_seconds(),
+            max_body_bytes: default_max_body_bytes(),
+            cors: crate::hardening::CorsProps::default(),
+        }
     }
 }
 

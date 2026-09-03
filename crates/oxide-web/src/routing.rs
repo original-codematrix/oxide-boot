@@ -34,14 +34,15 @@ fn validate_routes(routes: &[&RouteDescriptor]) -> Result<(), WebError> {
 }
 
 /// A cross-cutting layer applied to the fully-mounted router (e.g. metrics,
-/// tracing). `apply` receives the router with all `RouteDescriptor`s already
-/// mounted — this is required for axum's `MatchedPath` extension to be
-/// visible to any `middleware::from_fn` the layer installs. Collected layers
-/// are applied in ascending `name` order for deterministic behavior when
-/// several layers are present.
+/// tracing, request timeout/body limit/CORS). `apply` receives the context
+/// (so config-driven layers can resolve their own `*Props`) and the router
+/// with all `RouteDescriptor`s already mounted — this is required for axum's
+/// `MatchedPath` extension to be visible to any `middleware::from_fn` the
+/// layer installs. Collected layers are applied in ascending `name` order
+/// for deterministic behavior when several layers are present.
 pub struct RouterLayer {
     pub name: &'static str,
-    pub apply: fn(Router) -> Router,
+    pub apply: fn(&Context, Router) -> Router,
 }
 
 inventory::collect!(RouterLayer);
@@ -64,7 +65,7 @@ pub(crate) fn build_router(ctx: &Context) -> Result<Router, WebError> {
     let mut layers: Vec<&RouterLayer> = inventory::iter::<RouterLayer>().collect();
     layers.sort_by_key(|l| l.name);
     for layer in layers {
-        router = (layer.apply)(router);
+        router = (layer.apply)(ctx, router);
         tracing::debug!(name = layer.name, "router layer applied");
     }
 
