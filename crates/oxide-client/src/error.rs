@@ -21,6 +21,8 @@ pub enum ClientError {
     Http { status: StatusCode, body: String },
     #[error("failed to parse response body as JSON: {0}")]
     Json(String),
+    #[error("{0}")]
+    Config(String),
     #[error("client error: {0}")]
     Other(String),
 }

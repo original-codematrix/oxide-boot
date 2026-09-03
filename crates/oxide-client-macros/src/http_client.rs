@@ -2,7 +2,7 @@
 //! trait into a reqwest-based client implementation registered as a component.
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{FnArg, ItemTrait, LitStr, Pat, Type};
 
 const ROUTE_ATTRS: [(&str, &str); 5] =
@@ -66,6 +66,16 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
     let base_url_lit = base_url.clone();
     let client_name_lit = client_name.clone();
 
+    // Per-client timeout properties, bound to `oxide.clients.<name>` (the
+    // prefix is known at macro-expansion time since `client_name` is
+    // derived from the trait's own identifier). `default` seeds the
+    // defaults into the config tree so `connect-timeout-seconds` /
+    // `request-timeout-seconds` are env-overridable even when the whole
+    // `oxide.clients.<name>` section is absent from YAML — see
+    // `oxide_core::config::ConfigDefaults`.
+    let props_ident = format_ident!("{}Props", client_ident);
+    let props_prefix = LitStr::new(&format!("oxide.clients.{client_name}"), proc_macro2::Span::call_site());
+
     Ok(quote! {
         /// Concrete client created by `#[http_client]`, backed by reqwest.
         pub struct #client_ident {
@@ -77,15 +87,54 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             #(#method_impls)*
         }
 
+        #[derive(
+            ::std::fmt::Debug,
+            ::std::clone::Clone,
+            ::oxide_client::__private::serde::Deserialize,
+            ::oxide_client::__private::serde::Serialize,
+            ::oxide_client::__private::ConfigProperties,
+        )]
+        #[config(prefix = #props_prefix, default)]
+        #[doc(hidden)]
+        #[allow(non_camel_case_types)]
+        pub struct #props_ident {
+            #[serde(rename = "connect-timeout-seconds", default = "::oxide_client::__private::default_connect_timeout_seconds")]
+            pub connect_timeout_seconds: u64,
+            #[serde(rename = "request-timeout-seconds", default = "::oxide_client::__private::default_request_timeout_seconds")]
+            pub request_timeout_seconds: u64,
+        }
+
+        impl ::core::default::Default for #props_ident {
+            fn default() -> Self {
+                Self {
+                    connect_timeout_seconds: ::oxide_client::__private::default_connect_timeout_seconds(),
+                    request_timeout_seconds: ::oxide_client::__private::default_request_timeout_seconds(),
+                }
+            }
+        }
+
         ::oxide_client::__private::inventory::submit! {
             ::oxide_client::__private::ComponentDescriptor::builder(
                 #client_name_lit,
                 ::core::any::TypeId::of::<#client_ident>,
                 |__builder| {
                     let __config = __builder.resolve::<::oxide_client::__private::AppConfig>()?;
-                    let __client = ::reqwest::Client::new();
+                    let __props = __builder.resolve::<#props_ident>()?;
                     let __base_url: ::std::string::String =
-                        ::oxide_client::__private::resolve_base_url(#base_url_lit, &__config);
+                        ::oxide_client::__private::resolve_base_url(#base_url_lit, &__config).map_err(|e| {
+                            ::oxide_client::__private::ContextError::Construct {
+                                type_name: #client_name_lit,
+                                message: ::std::string::ToString::to_string(&e),
+                            }
+                        })?;
+                    let __client = ::reqwest::Client::builder()
+                        .connect_timeout(::std::time::Duration::from_secs(__props.connect_timeout_seconds))
+                        .timeout(::std::time::Duration::from_secs(__props.request_timeout_seconds))
+                        .build()
+                        .map_err(|e| ::oxide_client::__private::ContextError::Construct {
+                            type_name: #client_name_lit,
+                            message: ::std::string::ToString::to_string(&e),
+                        })?;
                     __builder.insert(#client_ident { __client, __base_url });
                     ::core::result::Result::Ok(())
                 },
@@ -93,6 +142,9 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             .deps(|| <[_]>::into_vec(::std::boxed::Box::new([(
                 ::core::any::TypeId::of::<::oxide_client::__private::AppConfig>(),
                 "AppConfig",
+            ), (
+                ::core::any::TypeId::of::<#props_ident>(),
+                "http-client properties",
             )])))
             .build()
         }
@@ -141,10 +193,14 @@ fn generate_method(sig: &syn::Signature, verb: &str, sub_path: &str, client_name
 
     let method_str = syn::Ident::new(verb, proc_macro2::Span::call_site());
 
-    // Unwrap Path/Json wrappers.
+    // Unwrap Path/Json wrappers. Path values are percent-encoded per segment
+    // so a value containing `/`, `..` or `?` cannot change the route or
+    // inject a query string — it stays a literal, encoded segment.
     let mut prelude = Vec::new();
     for id in &path_params {
-        prelude.push(quote! { let #id = #id.0; });
+        prelude.push(quote! {
+            let #id = ::oxide_client::__private::encode_path_segment(&::std::format!("{}", #id.0));
+        });
     }
     if let Some(id) = &body_param {
         prelude.push(quote! { let #id = #id.0; });
@@ -202,11 +258,13 @@ fn generate_method(sig: &syn::Signature, verb: &str, sub_path: &str, client_name
 
     let metric_name = LitStr::new(verb, proc_macro2::Span::call_site());
     let client_lit = LitStr::new(client_name, proc_macro2::Span::call_site());
-    let method_sig = sig.ident.to_string();
-    let method_lit = LitStr::new(&method_sig, proc_macro2::Span::call_site());
+    // The `uri` metric label carries the route template known at compile
+    // time (e.g. `/invoices/{id}`), not the concrete interpolated path —
+    // otherwise cardinality is unbounded across distinct path-param values.
+    let route_template_lit = LitStr::new(sub_path, proc_macro2::Span::call_site());
 
     let send_call = quote! {
-        ::oxide_client::__private::send(&self.__client, __req, #client_lit, #metric_name, #method_lit)
+        ::oxide_client::__private::send(&self.__client, __req, #client_lit, #metric_name, #route_template_lit)
     };
 
     // Parse the return type: `Result<T, _>` → deserialize the body as `T`;
