@@ -32,6 +32,11 @@ MGMT_PORT="${MGMT_PORT:-8081}"
 KAFKA_SEED="${KAFKA_SEED:-200000}"
 MONGO_SEED="${MONGO_SEED:-50000}"
 VUS="${VUS:-100}"
+# CONCURRENT=1 starts the HTTP load while the Kafka backlog is still draining,
+# so both paths are saturated at once. That is the only way to measure combined
+# capacity: with a fully drained backlog the consumer merely keeps pace with
+# whatever the load test produces, which measures offered load, not capacity.
+CONCURRENT="${CONCURRENT:-0}"
 DURATION="${DURATION:-60s}"
 OUT="${OUT:-$ROOT/target/benchmark}"
 
@@ -112,6 +117,12 @@ echo "=== phase 1: seed ==================================================="
 echo
 echo "=== phase 2: drain (consumer throughput, no HTTP load) =============="
 start_app
+
+if [[ "$CONCURRENT" == "1" ]]; then
+  echo "    CONCURRENT=1: skipping the isolated drain, going straight to combined load"
+  DRAIN_RATE=0
+  drain_consumed=$(counter showcase_events_consumed_total); drain_consumed=${drain_consumed%.*}
+else
 drain_start=$(date +%s)
 prev=0
 stable=0
@@ -141,9 +152,26 @@ drain_elapsed=$(( $(date +%s) - drain_start ))
 drain_consumed=$(counter showcase_events_consumed_total); drain_consumed=${drain_consumed%.*}
 DRAIN_RATE=$(( drain_elapsed > 0 ? drain_consumed / drain_elapsed : 0 ))
 echo "    consumer throughput: ~${DRAIN_RATE} msg/s"
+fi
+
+# Samples the app process once a second for the duration of the load phase.
+# `ps` reports %cpu as a share of ONE core, so on an N-core box the ceiling is
+# N*100; rss is in kilobytes.
+sample_resources() {
+  local pid=$1 out=$2
+  echo "cpu_pct rss_kb threads" > "$out"
+  while kill -0 "$pid" 2>/dev/null; do
+    # LC_ALL=C: under a comma-decimal locale ps prints "36,7" and every
+    # consumer of this file has to guess which separator it got.
+    LC_ALL=C ps -o %cpu=,rss=,wq= -p "$pid" 2>/dev/null | awk '{print $1, $2, $3}' >> "$out"
+    sleep 1
+  done
+}
 
 echo
 echo "=== phase 3: load (k6 over REST + Mongo + Redis + Kafka) ============"
+sample_resources "$APP_PID" "$OUT/resources.txt" &
+SAMPLER_PID=$!
 echo "    Grafana: http://localhost:3000/d/oxide-showcase"
 before_consumed=$drain_consumed
 before_ts=$(date +%s)
@@ -158,7 +186,10 @@ K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
     --summary-export "$OUT/summary.json" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true
 
+kill "$SAMPLER_PID" 2>/dev/null || true
+
 after_consumed=$(counter showcase_events_consumed_total); after_consumed=${after_consumed%.*}
+after_produced=$(counter showcase_notes_created_total); after_produced=${after_produced%.*}
 after_ts=$(date +%s)
 load_window=$(( after_ts - before_ts ))
 LOAD_CONSUME_RATE=$(( load_window > 0 ? (after_consumed - before_consumed) / load_window : 0 ))
@@ -181,8 +212,36 @@ print(f"  HTTP p50 / p95 / p99 (ms) ... {g('http_req_duration','med')} / {g('htt
 print(f"  HTTP failure rate ............ {g('http_req_failed','rate',100)}%")
 print(f"  Iterations/s ................. {g('iterations','rate')}")
 PY
-echo "  Kafka consume rate, idle ..... ~${DRAIN_RATE} msg/s"
-echo "  Kafka consume rate, loaded ... ~${LOAD_CONSUME_RATE} msg/s"
+if [[ "$CONCURRENT" == "1" ]]; then
+  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (backlog present: this is capacity)"
+  remaining=$(( KAFKA_SEED + after_produced - after_consumed ))
+  echo "  Backlog still outstanding .... ${remaining}"
+else
+  echo "  Kafka consume rate, idle ..... ~${DRAIN_RATE} msg/s"
+  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (backlog was empty: this tracks"
+  echo "                                  the produce rate, it is NOT a capacity measurement)"
+fi
+echo
+echo "  resource use (the service process only, backing services excluded):"
+python3 - "$OUT/resources.txt" "$(sysctl -n hw.ncpu 2>/dev/null || nproc)" <<'PY2'
+import sys
+try:
+    rows = [l.split() for l in open(sys.argv[1]).read().splitlines()[1:] if l.strip()]
+    cpu = [float(r[0]) for r in rows if len(r) >= 2]
+    rss = [int(r[1]) for r in rows if len(r) >= 2]
+except Exception as e:
+    print(f"    (no samples: {e})"); raise SystemExit
+if not cpu:
+    print("    (no samples)"); raise SystemExit
+cores = int(sys.argv[2])
+# ps reports %cpu against one core, so divide by the core count to get the
+# share of the whole machine.
+print(f"    CPU avg / peak ............. {sum(cpu)/len(cpu):.0f}% / {max(cpu):.0f}% of one core"
+      f"  ({sum(cpu)/len(cpu)/cores:.0f}% / {max(cpu)/cores:.0f}% of {cores} cores)")
+print(f"    RSS avg / peak ............. {sum(rss)/len(rss)/1024:.0f} MB / {max(rss)/1024:.0f} MB")
+print(f"    samples .................... {len(cpu)} (1/s)")
+PY2
+
 echo
 echo "  service counters:"
 curl -fsS "http://127.0.0.1:${MGMT_PORT}/actuator/prometheus" | grep -E '^showcase_' | sed 's/^/    /'

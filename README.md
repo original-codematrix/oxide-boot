@@ -153,9 +153,26 @@ Reference numbers, M-series laptop, 100 VUs, 200k seeded events, 50k documents:
 | Kafka consume, under HTTP load | ~700 msg/s |
 | Seed producer rate | ~174,000 msg/s (broker ceiling) |
 
-Treat the consumer numbers as a floor rather than a limit: the listener does a
-Redis round trip per message at the default concurrency of 4, so it is bound by
-that round trip, not by the framework's dispatch.
+Those two numbers are measured **separately**, and that matters. `CONCURRENT=1`
+runs the HTTP load while the Kafka backlog is still draining, so both paths are
+saturated at once; both then collapse together — HTTP to ~2,600-3,200 req/s and
+the consumer to ~130-200 msg/s — while the service sits at 2-3% of 12 cores and
+60 MB RSS, and Redis, Mongo and Kafka all start reporting timeouts at the same
+moment.
+
+That collapse is **not** the framework. It is this measurement rig on macOS.
+Probing Redis from the host during a loaded run gives p50 6.5 ms against 0.14 ms
+on an idle stack — a 46x degradation while Redis itself is serving only ~4,000
+ops/s, far below the ~6,500 sequential and ~359,000 pipelined ops/s a single
+connection sustains through the same port mapping when nothing else is running.
+Raising the listener's concurrency from 4 to 64 changes nothing, which rules out
+the framework's own semaphore. What degrades is the host-to-container network
+path that Docker Desktop for macOS provides, and every backing service crosses it.
+
+So: the isolated numbers above are trustworthy, and the combined number from
+this rig is not. Getting a real combined figure means putting the service on the
+same side of that boundary — running it inside the compose network, or on Linux
+where containers share the host's network namespace.
 
 The first run of this benchmark measured 364 req/s at a p95 of 544 ms. The
 cause was not the framework: `GET /api/notes` had no result cap, so against a
