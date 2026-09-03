@@ -9,11 +9,17 @@ pub use oxide_macros::{ConfigProperties, component, main};
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.
+///
+/// Kept narrow on purpose: each item here is consumed by
+/// `oxide-macros`-generated code (`#[component]`, `#[main]`,
+/// `#[derive(ConfigProperties)]`) or by another crate's own `__private`
+/// module built on top of it (`oxide-client`), not re-exported wholesale
+/// from `oxide-core`.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::logging::LoggingInitializer;
     pub use inventory;
-    pub use oxide_core::*;
+    pub use oxide_core::serde_yaml_ng;
+    pub use oxide_core::{AppConfig, ComponentDescriptor, ConfigDefaults, Context, ContextError, Inject};
     pub use serde;
     pub use tokio;
 }

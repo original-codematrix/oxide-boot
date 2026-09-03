@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 
 [dependencies]
 oxide-core.workspace = true
@@ -16,7 +17,6 @@ serde_json.workspace = true
 metrics.workspace = true
 tracing.workspace = true
 opentelemetry.workspace = true
-opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-opentelemetry.workspace = true
 tokio.workspace = true
 tokio-util = "0.7"
@@ -31,3 +31,4 @@ tempfile.workspace = true
 oxide-observability.workspace = true
 tracing-subscriber.workspace = true
 trybuild.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }

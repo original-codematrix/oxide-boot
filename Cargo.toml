@@ -26,6 +26,9 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
+# V1 does not publish to crates.io; every workspace library crate sets
+# `publish.workspace = true` to pick this up.
+publish = false
 
 [workspace.dependencies]
 oxide-core = { path = "crates/oxide-core", version = "0.1.0" }

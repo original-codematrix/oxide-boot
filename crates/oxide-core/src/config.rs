@@ -137,32 +137,59 @@ fn apply_env_overrides(root: &mut Value, env: &HashMap<String, String>) {
         // Parse the value as a YAML scalar so "9090" becomes a number, "true" a bool.
         let value: Value = serde_yaml_ng::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()));
         // 1. Framework namespace against existing keys (`oxide` is the first segment).
-        if set_existing(root, &segments, value.clone(), 0) {
+        if set_env(root, &segments, value.clone(), BindMode::Existing, 0) {
             continue;
         }
         // 2. Stripped prefix against existing keys — makes app-level config env-overridable.
-        if segments.len() > 1 && set_existing(root, &segments[1..], value.clone(), 0) {
+        if segments.len() > 1 && set_env(root, &segments[1..], value.clone(), BindMode::Existing, 0) {
             continue;
         }
         // 3. Nothing matches: create under the framework namespace (pre-2a behavior).
-        set_relaxed(root, &segments, value);
+        set_env(root, &segments, value, BindMode::Relaxed, 0);
     }
+}
+
+/// Controls how [`set_env`] is allowed to grow the tree while binding an
+/// env-var override.
+#[derive(Clone, Copy)]
+enum BindMode {
+    /// Bind only along EXISTING keys (greedy longest match per level).
+    /// Intermediate levels must already exist; only the final leaf may be
+    /// newly inserted, and only once at least one existing level was
+    /// descended (`depth > 0`).
+    Existing,
+    /// Freely create mapping levels as needed, one per segment
+    /// (pre-2a behavior).
+    Relaxed,
 }
 
 /// Walks/creates the tree for the given env-var segments. At each level it
 /// greedily tries to match the longest run of segments against an existing
 /// key (normalized), so `KAFKA_BOOTSTRAP_SERVERS` binds to `bootstrap-servers`.
-/// Unknown paths are created with one mapping level per segment.
+/// In [`BindMode::Relaxed`], unknown paths are created with one mapping level
+/// per segment. In [`BindMode::Existing`], unknown paths fail to bind unless
+/// at least one existing level was already descended (`depth > 0`), in which
+/// case the single remaining leaf may still be created. Returns whether the
+/// value was bound (always `true` in `Relaxed` mode).
 ///
 /// **Precedence:** If an override path must descend through an existing non-mapping
 /// (scalar or sequence), that value is replaced by a mapping to allow the env var
 /// to set nested keys. This implements the Spring principle: env overrides always win.
-fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
+fn set_env(node: &mut Value, segments: &[String], value: Value, mode: BindMode, depth: usize) -> bool {
     if segments.is_empty() {
-        return;
+        return false;
     }
     if !matches!(node, Value::Mapping(_)) {
+        // Reached via an existing key that holds a scalar: env wins, convert.
+        if matches!(mode, BindMode::Existing) && depth == 0 {
+            return false;
+        }
         *node = Value::Mapping(Default::default());
+        if matches!(mode, BindMode::Existing) {
+            set_env(node, segments, value, BindMode::Relaxed, depth);
+            return true;
+        }
+        // Relaxed: fall through and keep matching against the fresh mapping.
     }
     let Value::Mapping(map) = node else { unreachable!() };
 
@@ -172,71 +199,38 @@ fn set_relaxed(node: &mut Value, segments: &[String], value: Value) {
         if let Some(key) = existing {
             if take == segments.len() {
                 map.insert(key, value);
-            } else {
-                // `key` came from `map.keys().find(...)` on this same `map`
-                // two lines above, so `map.get_mut(&key)` cannot miss.
-                set_relaxed(map.get_mut(&key).expect("key just found"), &segments[take..], value);
-            }
-            return;
-        }
-    }
-
-    let head = Value::String(segments[0].clone());
-    if segments.len() == 1 {
-        map.insert(head, value);
-    } else {
-        if map.get(&head).is_none() {
-            map.insert(head.clone(), Value::Mapping(Default::default()));
-        }
-        // `head` is now guaranteed present: either it already existed, or
-        // the `insert` two lines above just put it there.
-        set_relaxed(map.get_mut(&head).expect("just inserted"), &segments[1..], value);
-    }
-}
-
-/// Like `set_relaxed`, but binds only along EXISTING keys (greedy longest match
-/// per level). Intermediate levels must already exist; only the final leaf may
-/// be newly inserted, and only once at least one existing level was descended
-/// (`depth > 0`). Descending through an existing scalar key replaces it with a
-/// mapping — env overrides win by design (pinned in Phase 1); the remaining
-/// segments are then created below it via `set_relaxed`. Returns whether the
-/// value was bound.
-fn set_existing(node: &mut Value, segments: &[String], value: Value, depth: usize) -> bool {
-    if segments.is_empty() {
-        return false;
-    }
-    let Value::Mapping(map) = node else {
-        // Reached via an existing key that holds a scalar: env wins, convert.
-        if depth == 0 {
-            return false;
-        }
-        *node = Value::Mapping(Default::default());
-        set_relaxed(node, segments, value);
-        return true;
-    };
-
-    for take in (1..=segments.len()).rev() {
-        let candidate = normalize(&segments[..take].join(""));
-        let existing = map.keys().find(|k| matches!(k, Value::String(s) if normalize(s) == candidate)).cloned();
-        if let Some(key) = existing {
-            if take == segments.len() {
-                map.insert(key, value);
                 return true;
             }
-            // Same reasoning as in `set_relaxed`: `key` was just found via
-            // `map.keys().find(...)` on this same `map`.
+            // `key` came from `map.keys().find(...)` on this same `map`
+            // two lines above, so `map.get_mut(&key)` cannot miss.
             let child = map.get_mut(&key).expect("key just found");
-            return set_existing(child, &segments[take..], value, depth + 1);
+            return set_env(child, &segments[take..], value, mode, depth + 1);
         }
     }
 
-    // No existing key matched at this level: the leaf may be created here,
-    // but only if we already descended through at least one existing level.
-    if segments.len() == 1 && depth > 0 {
-        map.insert(Value::String(segments[0].clone()), value);
-        return true;
+    match mode {
+        BindMode::Relaxed => {
+            let head = Value::String(segments[0].clone());
+            if segments.len() == 1 {
+                map.insert(head, value);
+            } else {
+                if map.get(&head).is_none() {
+                    map.insert(head.clone(), Value::Mapping(Default::default()));
+                }
+                // `head` is now guaranteed present: either it already existed, or
+                // the `insert` two lines above just put it there.
+                set_env(map.get_mut(&head).expect("just inserted"), &segments[1..], value, mode, depth + 1);
+            }
+            true
+        }
+        // No existing key matched at this level: the leaf may be created here,
+        // but only if we already descended through at least one existing level.
+        BindMode::Existing if segments.len() == 1 && depth > 0 => {
+            map.insert(Value::String(segments[0].clone()), value);
+            true
+        }
+        BindMode::Existing => false,
     }
-    false
 }
 
 /// Merges every registered [`ConfigDefaults`] entry into `root`, under its
