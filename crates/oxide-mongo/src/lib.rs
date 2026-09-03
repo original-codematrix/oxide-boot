@@ -12,11 +12,14 @@ pub use config::{MongoClient, MongoProps};
 #[doc(hidden)]
 pub mod __private {
     pub use crate::config::{
-        count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, insert, merge, raw_filter, save,
+        count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, find_one, insert, merge,
+        raw_filter, save,
     };
+    pub use crate::document::DocumentMeta;
+    pub use inventory;
     pub use mongodb::bson::{self, Bson, Document, doc, to_bson};
     pub use mongodb::{Collection, Database};
-    pub use oxide_core::{ComponentDescriptor, Context};
+    pub use oxide_core::{ComponentDescriptor, Context, ContextError};
     pub use serde::de::DeserializeOwned;
 }
 
@@ -39,6 +42,8 @@ pub enum Error {
     InvalidPlaceholder { digits: String },
     #[error("mongo client has not been started yet (post_construct has not run)")]
     NotStarted,
+    #[error("document is missing its id field '{field}' after BSON serialization")]
+    MissingId { field: &'static str },
 }
 
 /// Result alias for the Mongo starter.

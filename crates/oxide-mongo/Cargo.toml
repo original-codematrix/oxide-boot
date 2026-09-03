@@ -25,3 +25,4 @@ regex.workspace = true
 oxide-test = { workspace = true, features = ["containers"] }
 tempfile.workspace = true
 tokio.workspace = true
+trybuild.workspace = true

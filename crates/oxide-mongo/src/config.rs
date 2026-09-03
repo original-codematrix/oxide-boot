@@ -155,6 +155,15 @@ where
     collection.find_one(doc! { "_id": id }).await.map_err(Into::into)
 }
 
+/// Backs a derived `find_by_<field>` method whose signature returns
+/// `Option<T>`: takes the first match, if any.
+pub async fn find_one<T>(collection: &Collection<T>, filter: Document) -> Result<Option<T>, crate::Error>
+where
+    T: serde::de::DeserializeOwned + Send + Sync,
+{
+    collection.find_one(filter).await.map_err(Into::into)
+}
+
 pub async fn count<T>(collection: &Collection<T>, filter: Document) -> Result<u64, crate::Error>
 where
     T: Send + Sync,
@@ -183,11 +192,21 @@ where
     collection.delete_one(filter).await.map(|r| r.deleted_count).map_err(Into::into)
 }
 
+/// Upserts `doc`, keyed on its `#[id]` field (per
+/// [`crate::document::DocumentMeta::id_field`]): a first `save` inserts, a
+/// later `save` with the same id replaces the existing document instead of
+/// erroring on a duplicate key. Use [`insert`] when insert-only semantics
+/// (fail on a duplicate id) are what's wanted instead.
 pub async fn save<T>(collection: &Collection<T>, doc: &T) -> Result<(), crate::Error>
 where
-    T: serde::Serialize + Sync + Send,
+    T: serde::Serialize + Sync + Send + crate::document::DocumentMeta,
 {
-    collection.insert_one(doc).await.map(|_| ()).map_err(Into::into)
+    let bson_doc = mongodb::bson::to_document(doc).map_err(crate::Error::Bson)?;
+    let id_field = T::id_field();
+    let id_value = bson_doc.get(id_field).cloned().ok_or(crate::Error::MissingId { field: id_field })?;
+    let mut filter = Document::new();
+    filter.insert(id_field, id_value);
+    collection.replace_one(filter, doc).upsert(true).await.map(|_| ()).map_err(Into::into)
 }
 
 pub async fn insert<T>(collection: &Collection<T>, doc: &T) -> Result<(), crate::Error>

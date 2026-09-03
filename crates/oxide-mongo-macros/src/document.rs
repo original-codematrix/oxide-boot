@@ -26,8 +26,13 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         }
     };
 
-    // Id field: exactly one `#[id]` field.
+    // Id field: exactly one `#[id]` field. `id_field()` reports the field's
+    // *serialized* (BSON) key — its `#[serde(rename = "...")]` value when
+    // present, else the Rust field name — since callers (e.g. `save`'s
+    // upsert) look the id up in a `bson::to_document`-serialized value,
+    // which is keyed by the serialized name, not the Rust identifier.
     let mut id_field: Option<syn::Ident> = None;
+    let mut id_field_bson_name: Option<String> = None;
     let mut field_names: Vec<String> = Vec::new();
     let mut indexes: Vec<TokenStream> = Vec::new();
     for field in &fields.named {
@@ -43,13 +48,15 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                     return Err(syn::Error::new_spanned(fname, "#[id] may only appear once"));
                 }
                 id_field = Some(fname.clone());
+                id_field_bson_name = Some(serde_rename(field)?.unwrap_or_else(|| fname.to_string()));
             } else if attr.path().is_ident("index") {
                 indexes.push(parse_index_attr(field, fname)?);
             }
         }
     }
-    let id_field = id_field
-        .ok_or_else(|| syn::Error::new_spanned(ident, "#[derive(Document)] requires one field marked #[id]"))?;
+    id_field.ok_or_else(|| syn::Error::new_spanned(ident, "#[derive(Document)] requires one field marked #[id]"))?;
+    let id_field_bson_name =
+        id_field_bson_name.expect("id_field_bson_name is set whenever id_field is (same branch above)");
 
     let field_names_lit = field_names;
     let indices_ty = quote! { &'static [oxide_mongo::document::IndexDecl] };
@@ -57,11 +64,37 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     Ok(quote! {
         impl oxide_mongo::document::DocumentMeta for #ident {
             fn collection_name() -> &'static str { #collection_lit }
-            fn id_field() -> &'static str { stringify!(#id_field) }
+            fn id_field() -> &'static str { #id_field_bson_name }
             fn field_names() -> &'static [&'static str] { &[ #(#field_names_lit),* ] }
             fn indexes() -> #indices_ty { &[ #(#indexes),* ] }
         }
     })
+}
+
+/// Reads a field's `#[serde(rename = "...")]` value, if present. Other
+/// nested meta items in the same `#[serde(...)]` attribute (`default`,
+/// `skip_serializing_if = "..."`, bare flags, ...) are scanned over rather
+/// than rejected, since `#[id]` fields commonly carry them alongside
+/// `rename`.
+fn serde_rename(field: &Field) -> syn::Result<Option<String>> {
+    let mut renamed: Option<String> = None;
+    for attr in &field.attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                let v: LitStr = meta.value()?.parse()?;
+                renamed = Some(v.value());
+            } else if meta.input.peek(syn::Token![=]) {
+                // Consume `key = value` pairs we don't care about so the
+                // parse doesn't choke on them.
+                let _: syn::Expr = meta.value()?.parse()?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(renamed)
 }
 
 fn parse_index_attr(field: &Field, ident: &syn::Ident) -> syn::Result<TokenStream> {

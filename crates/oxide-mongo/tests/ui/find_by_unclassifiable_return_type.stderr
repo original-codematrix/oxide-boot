@@ -1,0 +1,5 @@
+error: derived query 'find_by_name' must return `Result<Option<T>, _>` or `Result<Vec<T>, _>`
+  --> tests/ui/find_by_unclassifiable_return_type.rs:17:14
+   |
+17 |     async fn find_by_name(&self, name: String) -> oxide_mongo::Result<String>;
+   |              ^^^^^^^^^^^^
