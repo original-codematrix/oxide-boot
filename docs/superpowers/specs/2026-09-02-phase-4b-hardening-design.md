@@ -223,3 +223,35 @@ Client-Timeouts und das Env-Binding-Verhalten.
 | Rebalance-Handling ist schwer testbar | Testfall über zwei Consumer derselben Gruppe, die sich die Partitionen teilen |
 | Breaking Changes in den Mongo-Derived-Queries | Nur ein interner Nutzer (Testsuite); Grammatik im README korrigiert |
 | Sehr großer Umfang in einer Phase | Plan ist in drei Blöcke geteilt, jeder Block endet grün und committet |
+
+## 9. Abschluss (2026-09-03)
+
+Phase 4b ist abgeschlossen. 37 Commits auf `phase-4b`, alle 24 Tasks umgesetzt und
+reviewt. Die Definition of Done ist erfüllt:
+
+| Kriterium | Ergebnis |
+|---|---|
+| `make ci` | grün — fmt, clippy `-D warnings`, 144 Tests in 73 Binaries, `cargo audit`, `cargo deny` (`advisories ok, bans ok, licenses ok, sources ok`) |
+| `make msrv` | grün gegen 1.88 |
+| Duplizierte tonic-Stacks | `cargo tree -d \| grep -c '^tonic'` → 0 |
+| RUSTSEC-Advisories | 0 bei 415 gescannten Dependencies |
+| README | Exposure, `show-details`, Timeouts, Body-Limit, Client-Timeouts und Env-Binding dokumentiert |
+
+Über die Spec hinaus in dieser Phase gelandet:
+
+- Toolchain-Pin 1.96.0 → **1.98.1**, `make ci` und `make msrv` darauf grün, keine
+  neuen Clippy-Lints. Deklarierte MSRV bleibt 1.88.
+- **Debug-Profile begrenzt**: ein voller Workspace-Testbuild hatte `target/` auf
+  61 GB getrieben, davon ~42 GB Debug-Info in `debug/deps`. Dependencies bauen
+  jetzt ohne Debug-Info, Workspace-Crates behalten Line-Tables. Dazu `make clean`.
+- **`make loadtest`**: Release-Build des rest-api-Beispiels unter k6, gegen
+  dieselbe Redpanda-Konfiguration wie die Testfixtures, mit Thresholds, die den
+  Lauf scheitern lassen — damit als Regressions-Gate nutzbar, nicht nur als Report.
+- Der Kommentar zu den Versions-Pins in `deny.toml` war sachlich falsch (er
+  begründete sie mit publizierbaren Crates; alle Crates sind `publish = false`).
+  Der wirkliche Grund ist, dass die `publish = false`-Ausnahme nur zusammen mit
+  `allow-wildcard-paths` greift, das cargo-deny standardmäßig aus lässt.
+
+Offen und nach Phase 4c verschoben: die Feature-Lücken aus Anhang A.4 und die
+Spring-Parität aus A.5 (Scheduler, Validation, Trait-Injection, `TestApp::replace`,
+`@Import`-Mechanismus, Pagination) sowie ein `oxide-redis`-Starter.
