@@ -20,6 +20,7 @@ members = [
     "examples/rest-api",
     "examples/http-client",
     "examples/kafka",
+    "examples/showcase",
 ]
 
 [workspace.package]

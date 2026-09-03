@@ -1,0 +1,19 @@
+# A load test's interesting window is often under a minute, so the scrape
+# interval is short: at the default 15s a 30s run yields two points.
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: showcase
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # The app runs on the host, not in this compose network -- see the
+      # comment at the top of docker-compose.yml.
+      - targets: ["host.docker.internal:8081"]
+        labels:
+          service: showcase
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

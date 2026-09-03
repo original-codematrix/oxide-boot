@@ -1,0 +1,30 @@
+[package]
+name = "showcase"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+oxide-boot.workspace = true
+oxide-web.workspace = true
+oxide-observability.workspace = true
+oxide-kafka.workspace = true
+oxide-mongo.workspace = true
+oxide-redis.workspace = true
+# Named directly by the code `#[mongo_repository]` generates.
+mongodb.workspace = true
+futures.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+metrics.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+# The `seed` binary talks to the drivers directly (see its module docs).
+rdkafka.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+oxide-test = { workspace = true, features = ["containers"] }
+tempfile.workspace = true

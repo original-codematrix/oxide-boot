@@ -1,0 +1,32 @@
+oxide:
+  application:
+    name: showcase
+  server:
+    port: 8080
+    # Under load these are the two limits that decide whether a slow
+    # dependency degrades the service or takes it down.
+    request-timeout-seconds: 10
+    max-body-bytes: 1048576
+  management:
+    port: 8081
+    endpoints:
+      # `prometheus` is opt-in by default; the load-test stack scrapes it, so
+      # it is enabled explicitly here.
+      exposure: "health,info,prometheus"
+      show-details: never
+  logging:
+    level:
+      root: info
+  mongo:
+    uri: "mongodb://localhost:27017"
+    database: showcase
+  redis:
+    url: "redis://127.0.0.1:6379"
+    key-prefix: "showcase:"
+  kafka:
+    bootstrap-servers: "localhost:9092"
+    # The listener folds events into a Redis counter; a Redis blip should
+    # cost a retry, not a lost count, and only then land in the DLT.
+    max-attempts: 3
+    backoff-initial-ms: 200
+    dlt-enabled: true

@@ -115,6 +115,56 @@ client-side numbers. Requires `docker` and `k6`.
 
 [k6]: https://k6.io
 
+### Benchmark (all four integrations)
+
+`make benchmark` runs the `showcase` example — HTTP, MongoDB, Redis/Dragonfly
+and Kafka in one service — against the local stack in `deploy/`, in three
+phases, because a single mixed run cannot say which component is the limit:
+
+1. **seed** — fill Mongo with a corpus and Kafka with a backlog *before* the
+   app boots. The producer rate printed here is the broker's ceiling on this
+   machine.
+2. **drain** — start the app and measure how fast the Kafka listener eats the
+   backlog with no HTTP load competing for the runtime: consumer throughput,
+   isolated.
+3. **load** — k6 drives the REST surface while the consumer keeps running. The
+   drop from phase 2 is the cost of contention.
+
+```sh
+make stack        # docker compose: Redpanda, MongoDB, Dragonfly, Prometheus, Grafana
+make benchmark    # knobs: KAFKA_SEED, MONGO_SEED, VUS, DURATION
+make stack-down
+```
+
+Grafana is provisioned at <http://localhost:3000/d/oxide-showcase> (anonymous,
+no login) with the service's own metrics next to k6's client-side numbers, so
+offered load and handled load sit on the same axis. Nothing here goes near
+Kubernetes: the backing services are local containers and the service itself
+runs on the host from a release build.
+
+Reference numbers, M-series laptop, 100 VUs, 200k seeded events, 50k documents:
+
+| | |
+|---|---|
+| HTTP throughput | ~11,500 req/s |
+| HTTP p50 / p95 / p99 | 6.4 ms / 16 ms / 27 ms |
+| HTTP failure rate | 0% (1.56M checks, none failed) |
+| Kafka consume, idle | ~4,200 msg/s |
+| Kafka consume, under HTTP load | ~700 msg/s |
+| Seed producer rate | ~174,000 msg/s (broker ceiling) |
+
+Treat the consumer numbers as a floor rather than a limit: the listener does a
+Redis round trip per message at the default concurrency of 4, so it is bound by
+that round trip, not by the framework's dispatch.
+
+The first run of this benchmark measured 364 req/s at a p95 of 544 ms. The
+cause was not the framework: `GET /api/notes` had no result cap, so against a
+20k-document corpus every request serialised ~6,700 documents. Capping it took
+throughput to ~11,500 req/s — a 32x difference from one missing `limit`, which
+is the most useful thing this benchmark has produced so far. Derived queries
+still have no `limit`/`skip`/`sort`, so the example reaches for the driver
+directly there; see the gap list below.
+
 ## Web (oxide-web)
 
 Add `oxide-web` as a dependency and your application gains an HTTP server for

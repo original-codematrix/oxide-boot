@@ -1,0 +1,103 @@
+# Local load-test stack for the `showcase` example: the four backing services
+# it talks to, plus Prometheus and Grafana to watch it under load.
+#
+# The app itself is NOT in here on purpose -- it runs on the host from
+# `cargo run --release -p showcase`, so a rebuild is a restart and not an
+# image build. Prometheus reaches it via `host.docker.internal`.
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+#   scripts/loadtest-showcase.sh
+#   open http://localhost:3000
+#
+# Ports are offset from the test fixtures' (9092/27017/6379) so this stack and
+# `cargo test` can run at the same time without fighting over them.
+
+name: oxide-loadtest
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.2.1
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --overprovisioned
+      - --smp=2
+      - --memory=2G
+      # Two listeners, which Redpanda needs whenever clients live on both
+      # sides of the compose network. A single listener advertising
+      # `localhost:19092` breaks every in-container client (rpk included):
+      # they resolve the advertised address and dial a port that only exists
+      # on the host.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      # `--set` and its value must be separate argv entries: rpk forwards
+      # `--set=k=v` verbatim to the redpanda binary, which rejects it.
+      - --set
+      - redpanda.empty_seed_starts_cluster=true
+    ports:
+      # Same number on both sides: the external listener advertises 19092, so
+      # a remapped host port would advertise an address the host cannot reach.
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo:
+    image: mongo:7
+    command: ["mongod", "--bind_ip_all"]
+    ports:
+      - "37017:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ping:1})' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.23.2
+    command: ["dragonfly", "--logtostderr"]
+    # Dragonfly uses io_uring and wants a larger lock limit than the Docker
+    # default; without this it exits at startup on some hosts.
+    ulimits:
+      memlock: -1
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 6379 ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+      # k6 pushes its client-side metrics here, so the dashboard can put
+      # offered load next to what the service actually did with it.
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Linux hosts do not define this name for us the way Docker Desktop does.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
