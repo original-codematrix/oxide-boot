@@ -55,61 +55,9 @@ fn user(n: i32, status: &str, age: i32) -> User {
     }
 }
 
-// Shared MongoDB container on port 27017 with atexit cleanup.
-static CONTAINER: tokio::sync::OnceCell<ContainerRef> = tokio::sync::OnceCell::const_new();
-static CONTAINER_ID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-struct ContainerRef {
-    _node: testcontainers::ContainerAsync<testcontainers::GenericImage>,
-}
-
-extern "C" fn cleanup_container() {
-    let id = CONTAINER_ID.lock().map(|g| g.clone()).ok().flatten();
-    if let Some(id) = id {
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &id]).output();
-    }
-}
-
-async fn ensure_uri() -> String {
-    CONTAINER
-        .get_or_init(|| async {
-            use testcontainers::ImageExt;
-            use testcontainers::core::IntoContainerPort;
-            use testcontainers::runners::AsyncRunner;
-            let build = || {
-                // Note: `mongo:8` refuses to run on the CI/host Linux kernel (6.19+),
-                // see mongodb SERVER-121912; `mongo:7` starts fine and exercises the same
-                // repository surface.
-                testcontainers::GenericImage::new("mongo", "7")
-                    .with_mapped_port(27017, 27017.tcp())
-                    .with_cmd(["mongod", "--bind_ip_all"])
-            };
-            let mut node = None;
-            for attempt in 0..8 {
-                match build().start().await {
-                    Ok(n) => {
-                        node = Some(n);
-                        break;
-                    }
-                    Err(_) if attempt < 7 => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
-                    Err(e) => panic!("mongo test requires Docker: {e}"),
-                }
-            }
-            let node = node.expect("node");
-            *CONTAINER_ID.lock().expect("lock") = Some(node.id().to_string());
-            static R: std::sync::Once = std::sync::Once::new();
-            R.call_once(|| {
-                unsafe { libc::atexit(cleanup_container) };
-            });
-            ContainerRef { _node: node }
-        })
-        .await;
-    // Local single-node: the driver can access it via localhost:27017.
-    "mongodb://localhost:27017".to_string()
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn repository_crud_and_derived_queries() {
-    let uri = ensure_uri().await;
+    let uri = oxide_test::containers::mongo().await.endpoint;
     let client = mongodb::Client::with_uri_str(&uri).await.expect("connect");
     // Wait until Mongo actually accepts writes (it can lag behind container start).
     tokio::time::timeout(std::time::Duration::from_secs(90), async {

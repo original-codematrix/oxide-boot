@@ -9,7 +9,7 @@ pub mod routing;
 mod serve;
 pub mod server;
 pub use error::{ApiError, IntoProblemDetail, ProblemDetail, WebError};
-pub use health::{HealthIndicator, HealthStatus, RegisteredCheck};
+pub use health::{HealthIndicator, HealthStatus, RegisteredCheck, simple_indicator};
 pub use management::{ManagementProps, ManagementRoute, ManagementServer};
 pub use oxide_web_macros::controller;
 pub use routing::{RouteDescriptor, RouterLayer};

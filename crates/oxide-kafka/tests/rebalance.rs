@@ -90,29 +90,14 @@ async fn boot(group: &str) -> (tempfile::TempDir, oxide_boot::Application) {
     (dir, app)
 }
 
-/// Creates `TOPIC` with `TOPIC_PARTITIONS` partitions via the admin API — a
-/// plain produce would auto-create it with a single partition, which cannot
-/// exercise a rebalance that splits ownership across two consumers.
+/// Resets `TOPIC` to `TOPIC_PARTITIONS` empty partitions via the admin API —
+/// a plain produce would auto-create it with a single partition (which
+/// cannot exercise a rebalance that splits ownership across two consumers),
+/// and on the shared, reused broker (see harness module docs) an earlier
+/// invocation may have left records or a different partition count behind,
+/// so this deletes and recreates it rather than tolerating an existing one.
 async fn create_topic() {
-    use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-    use rdkafka::client::DefaultClientContext;
-
-    let mut config = rdkafka::ClientConfig::new();
-    config.set("bootstrap.servers", harness::bootstrap_servers().await);
-    let admin: AdminClient<DefaultClientContext> = config.create().expect("create admin client");
-    let new_topic = NewTopic::new(TOPIC, TOPIC_PARTITIONS, TopicReplication::Fixed(1));
-    let results =
-        admin.create_topics(&[new_topic], &AdminOptions::new()).await.expect("create_topics request succeeds");
-    for r in results {
-        // `TopicAlreadyExists` is fine — a previous run of this binary (or a
-        // stray auto-create) may have already created it with the right
-        // partition count; any other error is a genuine test-setup failure.
-        if let Err((name, e)) = r
-            && e != rdkafka::types::RDKafkaErrorCode::TopicAlreadyExists
-        {
-            panic!("topic '{name}' creation failed: {e:?}");
-        }
-    }
+    harness::reset_topic(TOPIC, TOPIC_PARTITIONS).await;
 }
 
 async fn wait_until(cond: impl Fn() -> bool, timeout: Duration) -> bool {

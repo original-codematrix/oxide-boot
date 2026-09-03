@@ -15,6 +15,5 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-testcontainers.workspace = true
-libc = "0.2"
+oxide-test = { workspace = true, features = ["containers"] }
 rdkafka.workspace = true

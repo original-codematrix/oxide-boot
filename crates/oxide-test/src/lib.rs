@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 
 pub use oxide_test_macros::oxide_test;
 
+#[cfg(feature = "containers")]
+pub mod containers;
+
 /// Entry point for booting an application in tests.
 pub struct TestApp;
 

@@ -185,6 +185,12 @@ async fn read_topic(topic: &str) -> Vec<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
 async fn retry_stops_after_success_and_skips_dlt() {
     let _boot = BOOT_LOCK.lock().await;
     FLAKY_ATTEMPTS.store(0, Ordering::SeqCst);
+    // Both topics are fixed; on the shared, reused broker (see harness
+    // module docs) they can carry records from an earlier invocation, so
+    // reset them before producing — the DLT assertion below expects it
+    // empty.
+    harness::reset_topic("retry-flaky", 1).await;
+    harness::reset_topic("retry-flaky.DLT", 1).await;
     let group = harness::unique_topic("retry-flaky-g");
     let (_dir, app) = boot(&group, 3, 50).await;
     let producer = app.context().get::<oxide_kafka::KafkaProducer>().expect("producer");
@@ -222,6 +228,12 @@ async fn retry_stops_after_success_and_skips_dlt() {
 async fn permanent_failure_publishes_to_dlt_and_commits() {
     let _boot = BOOT_LOCK.lock().await;
     FAILING_ATTEMPTS.store(0, Ordering::SeqCst);
+    // Both topics are fixed; on the shared, reused broker (see harness
+    // module docs) they can carry records from an earlier invocation, so
+    // reset them before producing — the DLT assertion below expects
+    // exactly one record.
+    harness::reset_topic("retry-fail", 1).await;
+    harness::reset_topic("retry-fail.DLT", 1).await;
     let group = harness::unique_topic("retry-fail-g");
     let (_dir, app) = boot(&group, 2, 50).await;
     let producer = app.context().get::<oxide_kafka::KafkaProducer>().expect("producer");
@@ -276,6 +288,13 @@ async fn permanent_failure_publishes_to_dlt_and_commits() {
 async fn poison_pill_skips_retry_and_goes_straight_to_dlt() {
     let _boot = BOOT_LOCK.lock().await;
     POISON_ATTEMPTS.store(0, Ordering::SeqCst);
+    // Both topics are fixed; on the shared, reused broker (see harness
+    // module docs) they can carry records from an earlier invocation, so
+    // reset them before producing — `wait_for_first_record` below expects
+    // the DLT topic empty, and the final assertion expects exactly one
+    // record in it.
+    harness::reset_topic("retry-poison", 1).await;
+    harness::reset_topic("retry-poison.DLT", 1).await;
     let group = harness::unique_topic("retry-poison-g");
     let (_dir, app) = boot(&group, 3, 5000).await;
     let producer = app.context().get::<oxide_kafka::KafkaProducer>().expect("producer");

@@ -77,6 +77,11 @@ fn producer_consumer_trace_chain_and_consumer_lag() {
 
         let group = harness::unique_topic("tracing-e2e-g");
         RECEIVED.store(0, Ordering::SeqCst);
+        // The topic is fixed; on the shared, reused broker (see harness
+        // module docs) a leftover record from an earlier invocation could
+        // be consumed first and its (stale) trace headers would break the
+        // trace-chain assertions below, so reset it before producing.
+        harness::reset_topic("tracing-e2e", 1).await;
         let (_dir, app) = boot(&group).await;
         let producer = app.context().get::<oxide_kafka::KafkaProducer>().expect("producer");
 

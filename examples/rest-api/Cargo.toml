@@ -18,5 +18,4 @@ tracing.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
-testcontainers.workspace = true
-libc = "0.2"
+oxide-test = { workspace = true, features = ["containers"] }

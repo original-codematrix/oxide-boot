@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use oxide_core::Context;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -41,6 +42,20 @@ pub struct HealthIndicator {
 }
 
 inventory::collect!(HealthIndicator);
+
+/// Wraps an async health check into the `Box`+`Pin` shape `RegisteredCheck`
+/// requires. A `HealthIndicator::register` implementation typically resolves
+/// its dependencies from `Context` once, then returns `Some(simple_indicator
+/// (move || { ... }))` — this helper is just the boxing/pinning boilerplate
+/// that was otherwise duplicated at every call site (`oxide-kafka` and
+/// `oxide-mongo`'s health modules).
+pub fn simple_indicator<F, Fut>(check: F) -> RegisteredCheck
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = HealthStatus> + Send + 'static,
+{
+    Box::new(move || Box::pin(check()))
+}
 
 /// Resolves every registered `HealthIndicator` against `ctx`, once, at
 /// management-router build time. Indicators whose `register` returns `None`

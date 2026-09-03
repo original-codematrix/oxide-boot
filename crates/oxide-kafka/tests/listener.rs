@@ -77,8 +77,12 @@ async fn wait_until_len(n: usize, timeout: Duration) -> bool {
 async fn listener_delivers_partition_ordered_then_no_redelivery() {
     received().lock().expect("lock").clear();
     // Each binary run gets a distinct group so stale committed offsets from a
-    // previous execution don't interfere.
+    // previous execution don't interfere. The topic itself is fixed, so on
+    // a reused broker (see harness module docs) it can carry records left
+    // over from an earlier invocation into this fresh group's `earliest`
+    // read — reset it so the ordering/count assertions below are exact.
     let group = format!("listener-e2e-group-{}", harness::unique_topic("g"));
+    harness::reset_topic(LISTENER_TOPIC, 1).await;
 
     // Boot 1: register the listener, produce 5 messages on one key.
     let (_dir1, app1) = boot(&group).await;

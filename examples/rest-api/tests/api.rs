@@ -6,82 +6,26 @@
 //! - `/actuator/health` reports `components.kafka.status == "UP"`;
 //! - the scrape shows `kafka_producer_send_seconds` and `kafka_listener_seconds`.
 //!
-//! One Redpanda container per test binary (pinned host port 9092) with atexit
-//! cleanup, mirroring the oxide-kafka harness.
+//! One Redpanda container shared by the whole `cargo test` invocation (and
+//! reused by later ones), started via the shared `oxide_test::containers`
+//! fixture — see its module docs for why cross-binary contention needed a
+//! reused, fixed-port container rather than one container per binary.
 
 use oxide_boot::prelude::*;
 use oxide_web::{ManagementServer, WebServer};
 use rest_api::Note;
 use std::collections::HashMap;
 
-/// Shared Redpanda container on the pinned host port 9092 (auto-created topic
-/// on produce), removed at process exit.
-static CONTAINER: tokio::sync::OnceCell<ContainerRef> = tokio::sync::OnceCell::const_new();
-static CONTAINER_ID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-struct ContainerRef {
-    _node: testcontainers::ContainerAsync<testcontainers::GenericImage>,
-}
-
-extern "C" fn cleanup_container() {
-    let id = CONTAINER_ID.lock().map(|g| g.clone()).ok().flatten();
-    if let Some(id) = id {
-        let _ = std::process::Command::new("docker").args(["rm", "-f", &id]).output();
-    }
-}
-
-async fn ensure_container() {
-    CONTAINER
-        .get_or_init(|| async {
-            use testcontainers::ImageExt;
-            use testcontainers::core::IntoContainerPort;
-            use testcontainers::runners::AsyncRunner;
-            let build = || {
-                testcontainers::GenericImage::new("redpandadata/redpanda", "v24.2.1")
-                    .with_mapped_port(9092, 9092.tcp())
-                    .with_cmd([
-                        "redpanda",
-                        "start",
-                        "--mode",
-                        "dev-container",
-                        "--overprovisioned",
-                        "--smp",
-                        "1",
-                        "--memory",
-                        "1G",
-                        "--set",
-                        "redpanda.empty_seed_starts_cluster=true",
-                    ])
-            };
-            let mut node = None;
-            for attempt in 0..8 {
-                match build().start().await {
-                    Ok(n) => {
-                        node = Some(n);
-                        break;
-                    }
-                    Err(_) if attempt < 7 => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
-                    Err(e) => panic!("rest-api kafka test needs Docker: {e}"),
-                }
-            }
-            let node = node.expect("container start attempted");
-            *CONTAINER_ID.lock().expect("id lock") = Some(node.id().to_string());
-            static REGISTERED: std::sync::Once = std::sync::Once::new();
-            REGISTERED.call_once(|| {
-                unsafe { libc::atexit(cleanup_container) };
-            });
-            ContainerRef { _node: node }
-        })
-        .await;
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn create_fetch_and_kafka_flow() {
-    ensure_container().await;
+    // Shared, reused Redpanda container (auto-created topic on produce).
+    // `redpanda.endpoint` is what the fixture actually started/attached to —
+    // pass it through rather than assuming the yml default matches.
+    let redpanda = oxide_test::containers::redpanda().await;
     let env = HashMap::from([
         ("OXIDE_SERVER_PORT".to_string(), "0".to_string()),
         ("OXIDE_MANAGEMENT_PORT".to_string(), "0".to_string()),
-        ("OXIDE_KAFKA_BOOTSTRAP_SERVERS".to_string(), "localhost:9092".to_string()),
+        ("OXIDE_KAFKA_BOOTSTRAP_SERVERS".to_string(), redpanda.endpoint.clone()),
     ]);
     let app = OxideApplication::builder().base_dir(env!("CARGO_MANIFEST_DIR")).env(env).start().await.unwrap();
     let addr = app.context().get::<WebServer>().unwrap().local_addr().unwrap();

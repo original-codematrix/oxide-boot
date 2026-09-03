@@ -22,7 +22,6 @@ futures.workspace = true
 regex.workspace = true
 
 [dev-dependencies]
-testcontainers.workspace = true
+oxide-test = { workspace = true, features = ["containers"] }
 tempfile.workspace = true
 tokio.workspace = true
-libc = "0.2"

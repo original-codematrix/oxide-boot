@@ -7,7 +7,7 @@
 
 use crate::KafkaProps;
 use oxide_core::Context;
-use oxide_web::{HealthIndicator, HealthStatus, RegisteredCheck};
+use oxide_web::{HealthIndicator, HealthStatus, RegisteredCheck, simple_indicator};
 use rdkafka::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use std::sync::Arc;
@@ -54,19 +54,19 @@ fn register(ctx: &Context) -> Option<RegisteredCheck> {
             // invalid client config (not a connectivity problem) fails every
             // check from here on rather than boot itself.
             tracing::warn!(error = %e, "kafka health check failed to create consumer");
-            return Some(Box::new(|| {
-                Box::pin(async { HealthStatus::Down { detail: "failed to create consumer".to_string() } })
+            return Some(simple_indicator(|| async {
+                HealthStatus::Down { detail: "failed to create consumer".to_string() }
             }));
         }
     };
-    Some(Box::new(move || {
+    Some(simple_indicator(move || {
         let consumer = Arc::clone(&consumer);
-        Box::pin(async move {
+        async move {
             match tokio::task::spawn_blocking(move || check_metadata(&consumer)).await {
                 Ok(status) => status,
                 Err(_) => HealthStatus::Down { detail: "health check task failed".to_string() },
             }
-        })
+        }
     }))
 }
 

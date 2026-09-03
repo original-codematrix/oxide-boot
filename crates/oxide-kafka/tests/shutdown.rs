@@ -87,6 +87,10 @@ async fn shutdown_waits_for_in_flight_handler_and_commits_its_offset() {
     FINISHED.store(false, Ordering::SeqCst);
 
     let group = format!("shutdown-inflight-group-{}", harness::unique_topic("g"));
+    // The topic is fixed; on the shared, reused broker (see harness module
+    // docs) it can carry records left over from an earlier invocation, so
+    // reset it before producing the single message this test expects.
+    harness::reset_topic(TOPIC, 1).await;
 
     let (_dir1, app1) = boot(&group).await;
     let producer = app1.context().get::<oxide_kafka::KafkaProducer>().expect("KafkaProducer registered");
