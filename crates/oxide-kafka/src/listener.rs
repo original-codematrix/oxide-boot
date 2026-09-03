@@ -175,7 +175,10 @@ fn build_consumer(
 }
 
 /// Runs one listener: polls the consumer and routes messages to on-demand
-/// per-partition worker tasks; on cancel, drains and returns.
+/// per-partition worker tasks; on cancel, stops feeding new records, then
+/// awaits every worker (bounded by `shutdown_timeout`) before returning so
+/// their offset commits are issued (and flushed) before the consumer drops.
+#[allow(clippy::too_many_arguments)]
 async fn supervised_loop(
     consumer: Arc<StreamConsumer<crate::observe::StatsContext>>,
     handler: PreparedListener,
@@ -184,10 +187,21 @@ async fn supervised_loop(
     retry: crate::config::RetryProps,
     producer: Inject<KafkaProducer>,
     cancellation: CancellationToken,
+    listener_name: &'static str,
+    shutdown_timeout: Duration,
 ) {
     let handler = Arc::new(handler);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
-    let mut workers: HashMap<(String, i32), mpsc::Sender<RouteMessage>> = HashMap::new();
+    let mut senders: HashMap<(String, i32), mpsc::Sender<RouteMessage>> = HashMap::new();
+    let mut workers: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    // Tracks the last successfully-processed offset per (topic, partition),
+    // so a final synchronous commit can be issued after every worker has
+    // drained — the per-message commits during normal operation are async
+    // (fire-and-forget), so without this final flush the very last commits
+    // before the consumer drops are not guaranteed to have reached the
+    // broker.
+    let commit_state: Arc<std::sync::Mutex<HashMap<(String, i32), i64>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     loop {
         tokio::select! {
@@ -197,7 +211,7 @@ async fn supervised_loop(
                     Ok(m) => {
                         let route = RouteMessage::from_borrowed(&m);
                         let key = (route.topic.clone(), route.partition);
-                        let sender = match workers.get(&key) {
+                        let sender = match senders.get(&key) {
                             Some(s) => s.clone(),
                             None => {
                                 let (tx, rx) = mpsc::channel::<RouteMessage>(4);
@@ -207,10 +221,11 @@ async fn supervised_loop(
                                 let group = group.clone();
                                 let retry = retry.clone();
                                 let producer = producer.clone();
-                                tokio::spawn(async move {
-                                    partition_worker(rx, consumer, handler, semaphore, group, retry, producer).await;
+                                let commit_state = commit_state.clone();
+                                workers.spawn(async move {
+                                    partition_worker(rx, consumer, handler, semaphore, group, retry, producer, commit_state).await;
                                 });
-                                workers.insert(key.clone(), tx.clone());
+                                senders.insert(key.clone(), tx.clone());
                                 tx
                             }
                         };
@@ -232,15 +247,47 @@ async fn supervised_loop(
             }
         }
     }
-    // On cancel: relative order of in-flight handler completion is not observed
-    // beyond each partition (each worker finishes its current record, then sees
-    // its channel close and exits).
-    drop(workers);
-    tracing::debug!("listener supervisor drained");
+    // Stop feeding new records, then close every partition channel: each
+    // worker finishes its current record (if any), sees its channel close,
+    // and exits. Awaiting the JoinSet (bounded by `shutdown_timeout`) below
+    // is what actually waits for that in-flight work instead of abandoning
+    // it, which is the fix for Task 12.
+    drop(senders);
+
+    let total_workers = workers.len();
+    if tokio::time::timeout(shutdown_timeout, async { while workers.join_next().await.is_some() {} }).await.is_err() {
+        let remaining = workers.len();
+        tracing::warn!(
+            listener = listener_name,
+            remaining,
+            total = total_workers,
+            timeout_secs = shutdown_timeout.as_secs(),
+            "kafka shutdown timeout expired; some workers were still running, continuing shutdown"
+        );
+    }
+
+    // Flush the last offsets the (now-finished) workers committed: enqueued
+    // async commits are not guaranteed to have reached the broker yet, and
+    // the consumer is about to be dropped.
+    let final_offsets = commit_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    if !final_offsets.is_empty() {
+        let mut tpl = rdkafka::TopicPartitionList::new();
+        for ((topic, partition), offset) in &final_offsets {
+            if let Err(e) = tpl.add_partition(topic, *partition).set_offset(rdkafka::Offset::Offset(*offset)) {
+                tracing::error!(error = %e, topic = %topic, partition, "set_offset failed during shutdown flush");
+            }
+        }
+        if let Err(e) = consumer.commit(&tpl, rdkafka::consumer::CommitMode::Sync) {
+            tracing::error!(error = %e, listener = listener_name, "final offset commit failed during shutdown");
+        }
+    }
+
+    tracing::debug!(listener = listener_name, "listener supervisor drained");
 }
 
 /// Processes one partition's messages sequentially; commits after handler
 /// success (or after DLT-publish / log-and-commit for exhausted retries).
+#[allow(clippy::too_many_arguments)]
 async fn partition_worker(
     mut rx: mpsc::Receiver<RouteMessage>,
     consumer: Arc<StreamConsumer<crate::observe::StatsContext>>,
@@ -249,6 +296,7 @@ async fn partition_worker(
     group: String,
     retry: crate::config::RetryProps,
     producer: Inject<KafkaProducer>,
+    commit_state: Arc<std::sync::Mutex<HashMap<(String, i32), i64>>>,
 ) {
     while let Some(msg) = rx.recv().await {
         // `Semaphore::acquire` only errors once `close()` has been called on
@@ -304,7 +352,7 @@ async fn partition_worker(
         let _ = (last_error, partition);
 
         if commit {
-            commit_after_success(&consumer, &topic, partition, offset);
+            commit_after_success(&consumer, &topic, partition, offset, &commit_state);
         }
     }
 }
@@ -352,22 +400,31 @@ async fn run_with_retry(
 }
 
 /// Commits the offset AFTER a given message's handler succeeded. `CommitMode::Async`
-/// enqueues the offset commit; librdkafka sends it asynchronously.
+/// enqueues the offset commit; librdkafka sends it asynchronously. Also
+/// records the committed offset in `commit_state` so a final synchronous
+/// commit can flush it on shutdown (see `supervised_loop`).
 fn commit_after_success(
     consumer: &StreamConsumer<crate::observe::StatsContext>,
     topic: &str,
     partition: i32,
     offset: i64,
+    commit_state: &std::sync::Mutex<HashMap<(String, i32), i64>>,
 ) {
+    let next_offset = offset + 1;
     let mut tpl = rdkafka::TopicPartitionList::new();
-    let result = tpl.add_partition(topic, partition).set_offset(rdkafka::Offset::Offset(offset + 1));
+    let result = tpl.add_partition(topic, partition).set_offset(rdkafka::Offset::Offset(next_offset));
     if let Err(e) = result {
         tracing::error!(error = %e, topic=%topic, partition=partition, offset=offset, "set_offset failed");
         return;
     }
     if let Err(e) = consumer.commit(&tpl, rdkafka::consumer::CommitMode::Async) {
         tracing::error!(error = %e, topic=%topic, partition=partition, offset=offset, "offset commit failed");
+        return;
     }
+    commit_state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert((topic.to_string(), partition), next_offset);
 }
 
 inventory::submit! {
@@ -429,10 +486,17 @@ inventory::submit! {
                     // lazily, same as `KafkaProducer::new` (see its doc
                     // comment in `producer.rs`).
                     let consumer = build_consumer(&props, &group, &props.consumer.auto_offset_reset)?;
-                    if let Err(e) = consumer.subscribe(&[descriptor.topic]) {
-                        tracing::error!(error = %e, topic = descriptor.topic, "listener subscribe failed");
-                        continue;
-                    }
+                    // `rd_kafka_subscribe` (what `subscribe` wraps) only
+                    // validates the topic list locally — it registers
+                    // interest with the consumer-group balancer without any
+                    // network round-trip, so a genuine `Err` here means a
+                    // malformed topic (e.g. an invalid regex when using
+                    // pattern subscriptions) or similar local validation
+                    // failure, never "broker unreachable" (that's discovered
+                    // lazily on poll, same as `build_consumer` above /
+                    // `KafkaProducer::new`). So — unlike a transient `recv`
+                    // error in `supervised_loop` — this aborts the boot.
+                    consumer.subscribe(&[descriptor.topic]).map_err(|source| KafkaError::Client { source })?;
                     let cancellation = CancellationToken::new();
                     let consumer_arc = consumer.clone();
                     let handler_clone = handler;
@@ -441,8 +505,21 @@ inventory::submit! {
                     let group_run = group.clone();
                     let retry_run = retry.clone();
                     let producer_run = producer.clone();
+                    let listener_name = descriptor.listener_name;
+                    let shutdown_timeout = props.consumer.shutdown_timeout();
                     let supervisor = tokio::spawn(async move {
-                        supervised_loop(consumer_arc, handler_clone, group_run, concurrency, retry_run, producer_run, cancel_run).await;
+                        supervised_loop(
+                            consumer_arc,
+                            handler_clone,
+                            group_run,
+                            concurrency,
+                            retry_run,
+                            producer_run,
+                            cancel_run,
+                            listener_name,
+                            shutdown_timeout,
+                        )
+                        .await;
                     });
                     tracing::info!(listener = descriptor.listener_name, topic = descriptor.topic, group = %group, "kafka listener started");
                     runs.push(ListenerRun {

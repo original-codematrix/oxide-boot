@@ -25,6 +25,9 @@ fn default_backoff_multiplier() -> f64 {
 fn default_idempotence() -> bool {
     true
 }
+fn default_shutdown_timeout_seconds() -> u64 {
+    30
+}
 
 /// Retry / dead-letter configuration for the listener machinery.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -69,6 +72,17 @@ pub struct ConsumerProps {
     pub concurrency: usize,
     #[serde(default)]
     pub retry: RetryProps,
+    /// How long `pre_destroy` waits for in-flight partition workers to
+    /// finish (and commit their offsets) before giving up and continuing
+    /// shutdown anyway.
+    #[serde(default = "default_shutdown_timeout_seconds", rename = "shutdown-timeout-seconds")]
+    pub shutdown_timeout_seconds: u64,
+}
+
+impl ConsumerProps {
+    pub fn shutdown_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.shutdown_timeout_seconds)
+    }
 }
 
 impl Default for ConsumerProps {
@@ -77,6 +91,7 @@ impl Default for ConsumerProps {
             auto_offset_reset: default_auto_offset_reset(),
             concurrency: default_concurrency(),
             retry: RetryProps::default(),
+            shutdown_timeout_seconds: default_shutdown_timeout_seconds(),
         }
     }
 }
@@ -141,6 +156,8 @@ mod tests {
         assert_eq!(c.retry.backoff_initial_ms, 100);
         assert_eq!(c.retry.backoff_multiplier, 2.0);
         assert!(c.retry.dlt_enabled);
+        assert_eq!(c.shutdown_timeout_seconds, 30);
+        assert_eq!(c.shutdown_timeout(), std::time::Duration::from_secs(30));
     }
 
     #[test]
