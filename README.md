@@ -623,3 +623,34 @@ so no extra quoting is needed for the common case.
 | `DeadLetterPublishingRecoverer` | built in — exhausted records go to `<topic>.DLT` |
 | `spring.kafka.bootstrap-servers` | `oxide.kafka.bootstrap-servers` |
 | Spring-Kafka consumer lag | `kafka_consumer_lag{topic, partition, group}` |
+| `@Repository` + Spring Data derived queries | `#[mongo_repository]` + `#[derive(Document)]` |
+| `MongoTemplate` | `MongoClient` (injectable, `collection::<T>(name)`) |
+| `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (injectable) |
+| `spring.data.redis.url` | `oxide.redis.url` |
+| `@FeignClient` | `#[http_client]` |
+| `@SpringBootTest` | `TestApp::builder().start()` |
+
+### Starter coverage
+
+Seven of Spring Boot's starters have a counterpart here. Several large ones do
+not, and the gap is worth knowing before betting on this:
+
+| Spring Boot starter | Oxide Boot | State |
+|---|---|---|
+| `spring-boot-starter-web` | `oxide-web` | ✅ |
+| `spring-boot-starter-actuator` | `oxide-web` + `oxide-observability` | ✅ |
+| `spring-boot-starter-data-mongodb` | `oxide-mongo` | ✅ derived queries, no pagination |
+| `spring-kafka` | `oxide-kafka` | ✅ listeners, retry, DLT, rebalance-safe |
+| `spring-boot-starter-data-redis` | `oxide-redis` | ✅ template + health |
+| `spring-boot-starter-test` | `oxide-test` | ✅ boot harness, containers |
+| Spring Cloud OpenFeign | `oxide-client` | ✅ |
+| `spring-boot-starter-validation` | — | ❌ no `@Valid` / Bean Validation |
+| `spring-boot-starter-security` | — | ❌ no authn/authz at all |
+| `spring-boot-starter-data-jpa` / JDBC | — | ❌ no SQL support |
+| `spring-boot-starter-cache` (`@Cacheable`) | — | ❌ caching is manual; `oxide-redis` is the substrate for it |
+| `@Scheduled` / `spring-boot-starter-quartz` | — | ❌ no scheduler |
+| `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
+
+Also missing from the DI container itself: `@Import`-style explicit
+configuration classes, injection by trait (only concrete types resolve),
+`@MockBean`-style replacement in tests, and pagination in derived queries.
