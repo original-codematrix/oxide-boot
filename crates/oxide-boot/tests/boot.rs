@@ -189,7 +189,7 @@ async fn config_properties_are_bound_and_injectable() {
     app.stop().await.unwrap();
 }
 
-#[derive(ConfigProperties, serde::Deserialize, Default)]
+#[derive(ConfigProperties, serde::Deserialize, serde::Serialize, Default)]
 #[config(prefix = "optional-section", default)]
 struct OptionalProps {
     #[serde(default)]

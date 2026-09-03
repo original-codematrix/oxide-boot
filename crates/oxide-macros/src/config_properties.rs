@@ -30,6 +30,22 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
         ));
     };
 
+    let defaults_registration = if has_default {
+        quote! {
+            ::oxide_boot::__private::inventory::submit! {
+                ::oxide_boot::__private::ConfigDefaults {
+                    prefix: #prefix,
+                    defaults_yaml: || {
+                        ::oxide_boot::__private::serde_yaml_ng::to_string(&#ident::default())
+                            .unwrap_or_default()
+                    },
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let construct_body = if has_default {
         quote! {
             let __config = __builder.resolve::<::oxide_boot::__private::AppConfig>()?;
@@ -74,5 +90,7 @@ pub fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             )])))
             .build()
         }
+
+        #defaults_registration
     })
 }

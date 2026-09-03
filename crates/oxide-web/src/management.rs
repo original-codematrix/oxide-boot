@@ -33,7 +33,7 @@ const MANAGEMENT_SHUTDOWN_GRACE_SECONDS: u64 = 5;
 
 /// Configuration bound to the `oxide.management` prefix. The section may be
 /// absent entirely (falls back to `Default`).
-#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.management", default)]
 pub struct ManagementProps {
     #[serde(default = "default_address")]
@@ -67,7 +67,7 @@ impl Default for ManagementProps {
 }
 
 /// Which actuator endpoints get mounted, bound to `oxide.management.endpoints`.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct EndpointsProps {
     #[serde(default = "default_exposure")]
     pub exposure: String,

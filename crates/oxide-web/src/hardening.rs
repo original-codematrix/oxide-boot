@@ -23,7 +23,7 @@ fn default_allowed_origins() -> Vec<String> {
 
 /// Configuration bound to the `cors` sub-key of `oxide.server`/`oxide.management`.
 /// CORS is only mounted when `allowed_origins` is non-empty.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct CorsProps {
     #[serde(rename = "allowed-origins", default = "default_allowed_origins")]
     pub allowed_origins: Vec<String>,

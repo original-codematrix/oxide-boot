@@ -6,15 +6,15 @@ static BOOT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn test_config_dir() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    // `request-timeout-seconds`/`max-body-bytes` must already exist as keys for
-    // the env-override "relaxed matching" to bind a multi-segment env var (e.g.
-    // OXIDE_SERVER_REQUEST_TIMEOUT_SECONDS) onto the hyphenated key — see
-    // `oxide_core::config`'s `set_existing`/`set_relaxed`. Declaring them here
-    // with their normal defaults lets the tests override just the one value
-    // they care about via env.
+    // `request-timeout-seconds`/`max-body-bytes` are NOT declared here.
+    // `ServerProps`/`ManagementProps` carry `#[config(default)]`, so their
+    // defaults are seeded into the config tree before env overrides run
+    // (see `oxide_core::config::seed_defaults`) — that's what lets a
+    // multi-segment env var like OXIDE_SERVER_REQUEST_TIMEOUT_SECONDS bind
+    // to the hyphenated key even though it's absent from this YAML.
     std::fs::write(
         dir.path().join("application.yml"),
-        "oxide:\n  application:\n    name: limits-test\n  server:\n    port: 0\n    request-timeout-seconds: 30\n    max-body-bytes: 2097152\n  management:\n    port: 0\n    request-timeout-seconds: 30\n    max-body-bytes: 2097152\n",
+        "oxide:\n  application:\n    name: limits-test\n  server:\n    port: 0\n  management:\n    port: 0\n",
     )
     .unwrap();
     dir

@@ -43,7 +43,7 @@ fn default_sample_ratio() -> f64 {
 /// Configuration bound to the `oxide.otel` prefix. The section may be
 /// absent entirely (falls back to `Default`) — no `endpoint` means tracing
 /// export stays off.
-#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.otel", default)]
 pub struct OtelProps {
     #[serde(default)]

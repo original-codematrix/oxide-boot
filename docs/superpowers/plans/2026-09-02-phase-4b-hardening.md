@@ -284,6 +284,20 @@ Claude-Session: https://claude.ai/code/session_01KCbCYDWYust7oN81JcesaE"
 
 ---
 
+### Task 3b: Env-Overrides für kebab-case-Properties (eingeschoben 2026-09-03)
+
+Nachträglich eingeschoben, weil der Review von Task 3 einen Framework-Fehler belegt hat: eine
+mehrteilige `OXIDE_*`-Variable bindet nur dann an einen kebab-case-Schlüssel, wenn dieser bereits
+in der YAML steht — sonst entsteht stillschweigend eine tote verschachtelte Struktur. Das betrifft
+alle in dieser Phase eingeführten Properties und das bestehende `shutdown-grace-seconds`.
+
+Lösung: Die Phase-1-Bindungsregel bleibt unangetastet; stattdessen werden die Defaults aller
+`#[config(prefix = "...", default)]`-Structs vor den Env-Overrides in den Config-Baum eingesetzt,
+sodass die Schlüssel existieren. Vollständiger Task-Text:
+`.superpowers/sdd/2026-09-02-phase-4b-hardening/task-3b-brief.md`.
+
+---
+
 ### Task 4: Health-Cache und `show-details`
 
 **Files:**

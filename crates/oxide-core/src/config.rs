@@ -29,6 +29,28 @@ pub enum ConfigError {
     Placeholder { placeholder: String },
 }
 
+/// Registered by `#[derive(ConfigProperties)]` for every struct carrying
+/// `#[config(prefix = "...", default)]`. `AppConfig::load` merges each
+/// entry's serialized `Default` into the config tree under `prefix`
+/// *before* `apply_env_overrides` runs, so multi-segment kebab-case keys
+/// (e.g. `request-timeout-seconds`) exist as leaves even when the section
+/// is absent from YAML entirely — otherwise `set_existing`'s "bind only to
+/// an already-existing key" rule (pinned in Phase 1, see the tests below)
+/// has nothing to bind to, and the override silently creates a dead nested
+/// structure instead (`server.request.timeout.seconds`).
+///
+/// Existing YAML values always win over a seeded default — seeding only
+/// fills in keys that are still absent.
+#[derive(Debug)]
+pub struct ConfigDefaults {
+    pub prefix: &'static str,
+    /// Serializes the struct's `Default` value as a YAML mapping (kebab-case
+    /// keys, matching what deserialization expects).
+    pub defaults_yaml: fn() -> String,
+}
+
+inventory::collect!(ConfigDefaults);
+
 /// Layered application configuration, Spring-Boot style:
 /// `application.yml` -> `config/application.yml` -> per-profile files -> env overrides.
 #[derive(Debug, Clone)]
@@ -63,6 +85,7 @@ impl AppConfig {
                 }
             }
         }
+        seed_defaults(&mut root);
         apply_env_overrides(&mut root, env);
         resolve_placeholders(&mut root)?;
         Ok(Self { root, profiles })
@@ -199,6 +222,64 @@ fn set_existing(node: &mut Value, segments: &[String], value: Value, depth: usiz
         return true;
     }
     false
+}
+
+/// Merges every registered [`ConfigDefaults`] entry into `root`, under its
+/// `prefix`, before env overrides run. A malformed `defaults_yaml()` (should
+/// be unreachable — it round-trips a real `Default` value) is skipped rather
+/// than failing config load.
+fn seed_defaults(root: &mut Value) {
+    for entry in inventory::iter::<ConfigDefaults> {
+        let Ok(defaults) = serde_yaml_ng::from_str::<Value>(&(entry.defaults_yaml)()) else {
+            continue;
+        };
+        if let Some(node) = seed_path(root, entry.prefix) {
+            merge_seeded_defaults(node, defaults);
+        }
+    }
+}
+
+/// Walks `root` along the dot-separated `path`, creating mapping levels for
+/// segments that don't exist yet (as `Value::Null` placeholders, resolved by
+/// `merge_seeded_defaults`). Returns `None` if an existing segment along the
+/// way is a scalar/sequence rather than a mapping — seeding is skipped
+/// there; the user's existing value wins outright.
+fn seed_path<'a>(root: &'a mut Value, path: &str) -> Option<&'a mut Value> {
+    let mut node = root;
+    for segment in path.split('.') {
+        match node {
+            Value::Null => *node = Value::Mapping(Default::default()),
+            Value::Mapping(_) => {}
+            _ => return None,
+        }
+        let Value::Mapping(map) = node else { unreachable!() };
+        node = map.entry(Value::String(segment.to_string())).or_insert(Value::Null);
+    }
+    Some(node)
+}
+
+/// Fills `base` in with keys from `overlay` (a seeded default) that are not
+/// already present. Existing YAML values always win: a key present in
+/// `base` is left untouched (recursing into it if both sides are mappings),
+/// and a `base` that is already a non-mapping scalar/sequence is left alone
+/// entirely, even if the default would have been a mapping.
+fn merge_seeded_defaults(base: &mut Value, overlay: Value) {
+    match base {
+        Value::Null => *base = overlay,
+        Value::Mapping(base_map) => {
+            if let Value::Mapping(overlay_map) = overlay {
+                for (key, value) in overlay_map {
+                    match base_map.get_mut(&key) {
+                        Some(existing) => merge_seeded_defaults(existing, value),
+                        None => {
+                            base_map.insert(key, value);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Recursively merge `overlay` into `base`: mappings merge key-wise,
@@ -506,5 +587,48 @@ mod tests {
         write(dir.path(), "application.yml", "a: \"${b}\"\nb: \"${a}\"\n");
         let err = AppConfig::load(dir.path(), &HashMap::new()).unwrap_err();
         assert!(matches!(err, ConfigError::Placeholder { .. }), "was: {err}");
+    }
+
+    // Test-only ConfigDefaults registration mirroring what
+    // `#[derive(ConfigProperties)]` generates for a `default`-marked struct:
+    // a hyphenated key (`request-timeout-seconds`) that exists ONLY because
+    // it was seeded from the struct's `Default`, never written in YAML.
+    #[derive(Debug, serde::Serialize, Default)]
+    struct FakeServerProps {
+        #[serde(rename = "request-timeout-seconds")]
+        request_timeout_seconds: u64,
+    }
+
+    fn fake_server_defaults_yaml() -> String {
+        serde_yaml_ng::to_string(&FakeServerProps { request_timeout_seconds: 30 }).unwrap()
+    }
+
+    inventory::submit! {
+        crate::config::ConfigDefaults {
+            prefix: "oxide.server",
+            defaults_yaml: fake_server_defaults_yaml,
+        }
+    }
+
+    #[test]
+    fn env_override_binds_to_a_hyphenated_key_that_only_exists_as_a_seeded_default() {
+        let dir = tempfile::tempdir().unwrap();
+        // No `oxide.server` section at all in YAML — the hyphenated key only
+        // exists once the seeded default is merged in.
+        write(dir.path(), "application.yml", "oxide:\n  application:\n    name: demo\n");
+        let env = HashMap::from([("OXIDE_SERVER_REQUEST_TIMEOUT_SECONDS".into(), "5".into())]);
+        let cfg = AppConfig::load(dir.path(), &env).unwrap();
+
+        // Must bind to the hyphenated leaf, not create a dead nested structure.
+        assert_eq!(cfg.get::<u64>("oxide.server.request-timeout-seconds").unwrap(), 5);
+        assert!(cfg.get_opt::<u64>("oxide.server.request.timeout.seconds").unwrap().is_none());
+    }
+
+    #[test]
+    fn existing_yaml_value_wins_over_seeded_default() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "application.yml", "oxide:\n  server:\n    request-timeout-seconds: 99\n");
+        let cfg = AppConfig::load(dir.path(), &HashMap::new()).unwrap();
+        assert_eq!(cfg.get::<u64>("oxide.server.request-timeout-seconds").unwrap(), 99);
     }
 }

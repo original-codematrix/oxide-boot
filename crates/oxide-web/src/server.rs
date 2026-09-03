@@ -25,7 +25,7 @@ pub(crate) fn default_max_body_bytes() -> usize {
 
 /// Configuration bound to the `oxide.server` prefix. The section may be
 /// absent entirely (falls back to `Default`).
-#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.server", default)]
 pub struct ServerProps {
     #[serde(default = "default_address")]
