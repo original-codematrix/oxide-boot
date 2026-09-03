@@ -107,17 +107,44 @@ impl Default for ConsumerProps {
     }
 }
 
+fn default_send_timeout_seconds() -> u64 {
+    10
+}
+fn default_flush_timeout_seconds() -> u64 {
+    10
+}
+
 /// Producer-side tuning.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct ProducerProps {
     #[serde(default = "default_idempotence")]
     pub idempotence: bool,
+    /// Per-send timeout budget, passed to `FutureProducer::send`.
+    #[serde(default = "default_send_timeout_seconds")]
+    pub send_timeout_seconds: u64,
+    /// Timeout budget for the shutdown-time flush (`pre_destroy`).
+    #[serde(default = "default_flush_timeout_seconds")]
+    pub flush_timeout_seconds: u64,
+}
+
+impl ProducerProps {
+    pub fn send_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.send_timeout_seconds)
+    }
+
+    pub fn flush_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.flush_timeout_seconds)
+    }
 }
 
 impl Default for ProducerProps {
     fn default() -> Self {
-        Self { idempotence: default_idempotence() }
+        Self {
+            idempotence: default_idempotence(),
+            send_timeout_seconds: default_send_timeout_seconds(),
+            flush_timeout_seconds: default_flush_timeout_seconds(),
+        }
     }
 }
 
@@ -153,6 +180,21 @@ impl KafkaProps {
             config.set(*key, value.as_str());
         }
         config
+    }
+
+    /// Builds the `rdkafka::ClientConfig` for the `KafkaProducer`: the base
+    /// `client_config` plus `enable.idempotence`. `message.send.max.retries`
+    /// is raised to librdkafka's maximum ONLY when `idempotence` is `true` —
+    /// an idempotent producer safely retries duplicates (the broker
+    /// deduplicates them), but raising retries unboundedly on a
+    /// non-idempotent producer risks reordering/duplication the caller never
+    /// asked for, so that producer keeps librdkafka's own (bounded) default.
+    pub fn producer_client_config(&self) -> ClientConfig {
+        let mut extra: Vec<(&str, String)> = vec![("enable.idempotence", self.producer.idempotence.to_string())];
+        if self.producer.idempotence {
+            extra.push(("message.send.max.retries", i32::MAX.to_string()));
+        }
+        self.client_config(&extra)
     }
 }
 
@@ -229,5 +271,51 @@ mod tests {
         assert_eq!(config.get("bootstrap.servers"), Some("localhost:9092"));
         assert_eq!(config.get("message.timeout.ms"), Some("5000"));
         assert_eq!(config.get("enable.auto.commit"), Some("false"));
+    }
+
+    /// A minimal, fully-defaulted `KafkaProps` for tests that only care about
+    /// one field and want the rest at their documented defaults.
+    fn demo() -> KafkaProps {
+        KafkaProps {
+            bootstrap_servers: "localhost:9092".to_string(),
+            consumer: ConsumerProps::default(),
+            producer: ProducerProps::default(),
+            properties: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn producer_props_default_timeouts() {
+        let p = ProducerProps::default();
+        assert_eq!(p.send_timeout_seconds, 10);
+        assert_eq!(p.flush_timeout_seconds, 10);
+        assert_eq!(p.send_timeout(), std::time::Duration::from_secs(10));
+        assert_eq!(p.flush_timeout(), std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn producer_props_bind_documented_kebab_keys() {
+        let props: ProducerProps =
+            serde_json::from_str(r#"{"idempotence": false, "send-timeout-seconds": 7, "flush-timeout-seconds": 9}"#)
+                .unwrap();
+        assert!(!props.idempotence);
+        assert_eq!(props.send_timeout_seconds, 7);
+        assert_eq!(props.flush_timeout_seconds, 9);
+    }
+
+    #[test]
+    fn non_idempotent_producer_does_not_set_unbounded_retries() {
+        let props = KafkaProps { producer: ProducerProps { idempotence: false, ..Default::default() }, ..demo() };
+        let cfg = props.producer_client_config();
+        assert!(cfg.get("message.send.max.retries").is_none());
+        assert_eq!(cfg.get("enable.idempotence"), Some("false"));
+    }
+
+    #[test]
+    fn idempotent_producer_raises_max_retries() {
+        let props = KafkaProps { producer: ProducerProps { idempotence: true, ..Default::default() }, ..demo() };
+        let cfg = props.producer_client_config();
+        assert_eq!(cfg.get("message.send.max.retries"), Some(i32::MAX.to_string()).as_deref());
+        assert_eq!(cfg.get("enable.idempotence"), Some("true"));
     }
 }

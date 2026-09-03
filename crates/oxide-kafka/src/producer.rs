@@ -26,6 +26,8 @@ pub struct Delivery {
 /// and flushed on shutdown before the OpenTelemetry flush.
 pub struct KafkaProducer {
     producer: FutureProducer,
+    send_timeout: Duration,
+    flush_timeout: Duration,
 }
 
 impl KafkaProducer {
@@ -39,14 +41,13 @@ impl KafkaProducer {
     /// genuinely invalid client config (caught by `create()` itself, e.g. a
     /// bad `oxide.kafka.properties` passthrough value) fails boot.
     fn new(props: &KafkaProps) -> Result<Self, KafkaError> {
-        let config = props.client_config(&[
-            ("enable.idempotence", props.producer.idempotence.to_string()),
-            // Idempotent producers internally retry on transient errors; cap
-            // the retry count at librdkafka's maximum.
-            ("message.send.max.retries", "2147483647".to_string()),
-        ]);
+        let config = props.producer_client_config();
         let producer: FutureProducer = config.create().map_err(|source| KafkaError::Client { source })?;
-        Ok(Self { producer })
+        Ok(Self {
+            producer,
+            send_timeout: props.producer.send_timeout(),
+            flush_timeout: props.producer.flush_timeout(),
+        })
     }
 
     /// Serializes `value` as JSON and sends it with a string key.
@@ -90,7 +91,7 @@ impl KafkaProducer {
         let record = record.headers(owned);
 
         let started = Instant::now();
-        let result = self.producer.send(record, Timeout::After(Duration::from_secs(10))).instrument(span).await;
+        let result = self.producer.send(record, Timeout::After(self.send_timeout)).instrument(span).await;
 
         let outcome = match result {
             Ok((partition, offset)) => Ok(Delivery { partition, offset }),
@@ -109,7 +110,7 @@ impl KafkaProducer {
     }
 
     async fn flush(&self) -> KafkaResult<()> {
-        self.producer.flush(Timeout::After(Duration::from_secs(10)))
+        self.producer.flush(Timeout::After(self.flush_timeout))
     }
 }
 

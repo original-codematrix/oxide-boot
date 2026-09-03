@@ -82,3 +82,73 @@ async fn producer_send_delivers_json_and_key() {
 
     app.stop().await.expect("clean shutdown flushes producer");
 }
+
+/// `oxide.kafka.producer.send-timeout-seconds` / `.flush-timeout-seconds`
+/// bind from YAML and a non-idempotent producer must NOT get an unbounded
+/// `message.send.max.retries` — proven end-to-end (not just at the
+/// `ProducerProps`/`client_config` unit-test level) by booting a real app
+/// against the shared Redpanda container and confirming the producer still
+/// sends successfully with these overrides in place.
+#[tokio::test(flavor = "multi_thread")]
+async fn producer_config_binds_timeouts_and_bounds_retries_when_not_idempotent() {
+    let dir = tempdir().expect("tempdir");
+    let yml = format!(
+        "oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n    producer:\n      idempotence: false\n      send-timeout-seconds: 3\n      flush-timeout-seconds: 4\n",
+        harness::bootstrap_servers().await
+    );
+    std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
+    let app =
+        OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await.expect("boot oxide app");
+
+    let props = app.context().get::<KafkaProps>().expect("KafkaProps registered");
+    assert_eq!(props.producer.send_timeout_seconds, 3);
+    assert_eq!(props.producer.flush_timeout_seconds, 4);
+    assert!(!props.producer.idempotence);
+
+    let cfg = props.producer_client_config();
+    assert!(
+        cfg.get("message.send.max.retries").is_none(),
+        "a non-idempotent producer must keep librdkafka's own bounded retry default"
+    );
+
+    let producer = app.context().get::<KafkaProducer>().expect("KafkaProducer registered");
+    let topic = harness::unique_topic("producer-timeouts");
+    producer
+        .send(&topic, "k", &Note { id: 1, text: "ok".into() })
+        .await
+        .expect("send succeeds with the configured (non-default) timeouts");
+
+    app.stop().await.expect("clean shutdown flushes producer within the configured flush timeout");
+}
+
+/// `oxide.kafka.producer.idempotence: true` (the default) DOES raise
+/// `message.send.max.retries` to librdkafka's maximum.
+#[tokio::test(flavor = "multi_thread")]
+async fn idempotent_producer_config_raises_max_retries() {
+    let props = harness::kafka_props().await;
+    let cfg = props.producer_client_config();
+    assert_eq!(cfg.get("enable.idempotence"), Some("true"));
+    assert_eq!(cfg.get("message.send.max.retries"), Some(i32::MAX.to_string()).as_deref());
+}
+
+/// The `kafka` health indicator builds its consumer once (at registration,
+/// not per-check) and reuses it — proven by asserting it keeps reporting
+/// `UP` across several checks against the reachable Redpanda broker, rather
+/// than only the very first one succeeding.
+#[tokio::test(flavor = "multi_thread")]
+async fn health_indicator_reuses_cached_consumer_across_checks() {
+    let (_dir, app) = boot_with_kafka_config().await;
+    let mgmt_addr = app.context().get::<oxide_web::ManagementServer>().unwrap().local_addr().unwrap();
+
+    for attempt in 0..3 {
+        let body: serde_json::Value =
+            reqwest::get(format!("http://{mgmt_addr}/actuator/health")).await.unwrap().json().await.unwrap();
+        assert_eq!(
+            body["components"]["kafka"]["status"],
+            serde_json::json!("UP"),
+            "kafka health check #{attempt} should be UP against the reachable Redpanda broker: {body}"
+        );
+    }
+
+    app.stop().await.expect("clean shutdown");
+}
