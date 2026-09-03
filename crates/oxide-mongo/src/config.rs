@@ -8,7 +8,7 @@ use std::sync::{Arc, OnceLock};
 
 /// Configuration bound to the `oxide.mongo` prefix. `uri` is required
 /// (integration starter: missing section ⇒ fail-fast).
-#[derive(Debug, Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
+#[derive(Clone, serde::Deserialize, oxide_boot::ConfigProperties)]
 #[config(prefix = "oxide.mongo")]
 pub struct MongoProps {
     #[serde(rename = "uri")]
@@ -18,6 +18,24 @@ pub struct MongoProps {
     /// Ping the server at boot.
     #[serde(default = "default_true")]
     pub ping_on_start: bool,
+}
+
+// `uri` embeds the connection credentials, so a hand-written `Debug` redacts
+// it instead of deriving one that would print it verbatim (e.g. into logs).
+impl std::fmt::Debug for MongoProps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MongoProps")
+            .field("uri", &"<redacted>")
+            .field("database", &self.database)
+            .field("ping_on_start", &self.ping_on_start)
+            .finish()
+    }
+}
+
+impl Default for MongoProps {
+    fn default() -> Self {
+        Self { uri: String::new(), database: default_database(), ping_on_start: default_true() }
+    }
 }
 
 fn default_database() -> String {
@@ -88,9 +106,13 @@ inventory::submit! {
         let props = ctx.get::<MongoProps>().expect("MongoProps exists").clone();
         Box::pin(async move {
             client.connect().await.map_err(|e| {
+                // The driver's error text can echo back the connection string
+                // (credentials included), so log it and keep the propagated
+                // message generic.
+                tracing::error!(error = %e, "mongo connection failed");
                 oxide_core::ContextError::Construct {
                     type_name: "MongoClient",
-                    message: format!("failed to connect: {e}"),
+                    message: "failed to connect to MongoDB".to_string(),
                 }
             })?;
             if props.ping_on_start
@@ -307,5 +329,13 @@ mod tests {
     #[test]
     fn missing_argument_for_placeholder_is_an_error() {
         assert!(raw_filter(r#"{ "a": ?2 }"#, vec![Bson::Int32(1)]).is_err());
+    }
+
+    #[test]
+    fn debug_output_redacts_the_uri() {
+        let props = MongoProps { uri: "mongodb://user:secret@host:27017".into(), ..Default::default() };
+        let rendered = format!("{props:?}");
+        assert!(!rendered.contains("secret"), "credentials leaked: {rendered}");
+        assert!(rendered.contains("<redacted>"));
     }
 }

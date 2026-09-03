@@ -22,12 +22,20 @@ fn check_metadata(servers: &str) -> HealthStatus {
     config.set("socket.timeout.ms", "1500");
     let consumer: BaseConsumer = match config.create() {
         Ok(c) => c,
-        Err(e) => return HealthStatus::Down { detail: e.to_string() },
+        Err(e) => {
+            // Keep driver internals out of `detail` (surfaced by the health
+            // endpoint); the real error still goes to the logs.
+            tracing::warn!(error = %e, "kafka health check failed to create consumer");
+            return HealthStatus::Down { detail: "failed to create consumer".to_string() };
+        }
     };
     match consumer.fetch_metadata(None, FETCH_TIMEOUT) {
         Ok(meta) if !meta.brokers().is_empty() => HealthStatus::Up,
         Ok(_) => HealthStatus::Down { detail: "no brokers reachable".to_string() },
-        Err(e) => HealthStatus::Down { detail: e.to_string() },
+        Err(e) => {
+            tracing::warn!(error = %e, "kafka health check failed to fetch metadata");
+            HealthStatus::Down { detail: "metadata fetch failed".to_string() }
+        }
     }
 }
 

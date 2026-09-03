@@ -20,7 +20,12 @@ fn register(ctx: &Context) -> Option<RegisteredCheck> {
         Box::pin(async move {
             match tokio::time::timeout(PING_TIMEOUT, client.ping()).await {
                 Ok(Ok(())) => HealthStatus::Up,
-                Ok(Err(e)) => HealthStatus::Down { detail: e.to_string() },
+                Ok(Err(e)) => {
+                    // Keep driver internals out of `detail` (surfaced by the
+                    // health endpoint); the real error still goes to the logs.
+                    tracing::warn!(error = %e, "mongo health check failed");
+                    HealthStatus::Down { detail: "ping failed".to_string() }
+                }
                 Err(_) => HealthStatus::Down { detail: "timed out".to_string() },
             }
         })
