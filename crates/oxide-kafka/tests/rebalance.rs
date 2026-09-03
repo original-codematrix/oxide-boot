@@ -134,6 +134,16 @@ fn processed_count() -> usize {
     PROCESSED.lock().unwrap().len()
 }
 
+/// Sends one record with a fresh, globally-unique id and records that id in
+/// `produced` — the caller-local ledger the final assertion checks the
+/// processed set against exactly (catching both duplicates AND loss, unlike
+/// a bare "no duplicates" check).
+async fn produce(producer: &oxide_kafka::KafkaProducer, key: &str, produced: &mut Vec<u32>) {
+    let id = next_id();
+    producer.send(TOPIC, key, &Payload { id }).await.expect("produce record");
+    produced.push(id);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
     PROCESSED.lock().unwrap().clear();
@@ -144,15 +154,22 @@ async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
     let (_dir1, app1) = boot(&group).await;
     let producer = app1.context().get::<oxide_kafka::KafkaProducer>().expect("KafkaProducer registered");
 
+    let mut produced: Vec<u32> = Vec::new();
+
     // Find a key that the default partitioner routes to each of the two
-    // partitions, producing a probe record for each along the way.
+    // partitions, producing a probe record for each along the way. This can
+    // take more than `TOPIC_PARTITIONS` sends (a later key can land on a
+    // partition already covered), so the exact count only becomes known
+    // once the loop below finishes — never assume it's 2.
     let mut key_for_partition: HashMap<i32, String> = HashMap::new();
     for i in 0..64 {
         if key_for_partition.len() == TOPIC_PARTITIONS as usize {
             break;
         }
         let key = format!("k{i}");
-        let delivery = producer.send(TOPIC, &key, &Payload { id: next_id() }).await.expect("produce probe");
+        let id = next_id();
+        let delivery = producer.send(TOPIC, &key, &Payload { id }).await.expect("produce probe");
+        produced.push(id);
         key_for_partition.entry(delivery.partition).or_insert(key);
     }
     assert_eq!(key_for_partition.len(), TOPIC_PARTITIONS as usize, "need a key per partition to run this test");
@@ -163,8 +180,12 @@ async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
     let burst_keys: Vec<String> = key_for_partition.values().cloned().collect();
 
     // Give the single consumer (it owns both partitions so far) time to
-    // drain the two probe records above.
-    assert!(wait_until(|| processed_count() >= 2, Duration::from_secs(15)).await, "app1 never processed the probes");
+    // drain the probe records above (however many it took to find a key per
+    // partition).
+    assert!(
+        wait_until(|| processed_count() >= produced.len(), Duration::from_secs(15)).await,
+        "app1 never processed the probes"
+    );
 
     // Produce a burst of same-key (same-partition) records per partition.
     // With a `HANDLER_SLEEP` of 300ms and 4-way concurrency (both partition
@@ -174,10 +195,9 @@ async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
     const BURST_PER_PARTITION: u32 = 6;
     for _ in 0..BURST_PER_PARTITION {
         for key in &burst_keys {
-            producer.send(TOPIC, key, &Payload { id: next_id() }).await.expect("produce burst record");
+            produce(&producer, key, &mut produced).await;
         }
     }
-    let burst = BURST_PER_PARTITION as usize * burst_keys.len();
 
     // Boot the second consumer in the SAME group while the burst is still
     // draining: this forces the rebalance during the exact window the
@@ -188,7 +208,7 @@ async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
     // ends up owning its partition after the rebalance) and the rebalance
     // must complete.
     assert!(
-        wait_until(|| processed_count() >= 2 + burst, Duration::from_secs(30)).await,
+        wait_until(|| processed_count() >= produced.len(), Duration::from_secs(30)).await,
         "burst was not fully processed after the rebalance settled"
     );
     // A little extra grace: nothing async should still be in flight, but
@@ -197,27 +217,30 @@ async fn revoked_partition_is_not_processed_twice_across_a_rebalance() {
 
     // A final record on each partition proves both consumers remain healthy
     // (own a partition and keep processing) after the rebalance.
-    for key in key_for_partition.values() {
-        producer.send(TOPIC, key, &Payload { id: next_id() }).await.expect("produce post-rebalance record");
+    let post_rebalance_keys: Vec<String> = key_for_partition.values().cloned().collect();
+    for key in &post_rebalance_keys {
+        produce(&producer, key, &mut produced).await;
     }
     assert!(
-        wait_until(|| processed_count() >= 2 + burst + 2, Duration::from_secs(15)).await,
+        wait_until(|| processed_count() >= produced.len(), Duration::from_secs(15)).await,
         "post-rebalance confirmation records were not processed"
     );
 
     app1.stop().await.expect("app1 stops cleanly");
     app2.stop().await.expect("app2 stops cleanly");
 
-    // The core assertion: no id was ever processed twice — i.e. no record
-    // was processed by both the consumer that lost the partition and the
-    // one that gained it.
-    let processed = PROCESSED.lock().unwrap().clone();
-    let mut seen = std::collections::HashSet::new();
-    let mut duplicates = Vec::new();
-    for id in &processed {
-        if !seen.insert(*id) {
-            duplicates.push(*id);
-        }
-    }
-    assert!(duplicates.is_empty(), "record(s) processed more than once across the rebalance: {duplicates:?}");
+    // The core assertion: the processed multiset is EXACTLY the produced
+    // set — every record processed exactly once. A plain "no duplicates"
+    // check (the previous version of this test) cannot catch a LOST record
+    // (e.g. a revoked partition's tail silently dropped rather than handed
+    // off), only a doubly-processed one; comparing the full sorted set
+    // catches both.
+    let mut got = PROCESSED.lock().unwrap().clone();
+    got.sort_unstable();
+    let mut want = produced.clone();
+    want.sort_unstable();
+    assert_eq!(
+        got, want,
+        "processed ids must exactly match produced ids (no duplicates, no loss) across the rebalance"
+    );
 }

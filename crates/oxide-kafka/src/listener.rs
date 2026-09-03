@@ -16,10 +16,10 @@
 //!   (`ConsumerContext::pre_rebalance`): a revoked partition's worker is
 //!   cancelled (any buffered-but-not-yet-started record is dropped; a
 //!   record already in flight is allowed to finish) and whatever it
-//!   finished is committed synchronously before the rebalance completes.
-//!   A newly (re)assigned partition needs no extra handling — the existing
-//!   lazy per-partition worker creation starts one as soon as a record for
-//!   it arrives.
+//!   finished is (re-)committed before the rebalance completes, bounded by
+//!   a single deadline across the whole revoke. A newly (re)assigned
+//!   partition needs no extra handling — the existing lazy per-partition
+//!   worker creation starts one as soon as a record for it arrives.
 
 use crate::KafkaError;
 use crate::config::KafkaProps;
@@ -197,12 +197,21 @@ impl rdkafka::consumer::ConsumerContext for ListenerContext {
 }
 
 impl ListenerContext {
-    /// Stops every worker for a partition being revoked and issues a final
-    /// synchronous commit for what it had actually finished, before this
-    /// method returns — the default `rebalance()` driver (which calls
-    /// `pre_rebalance`) unassigns the partition immediately afterwards, and
+    /// Stops every worker for the partitions being revoked and issues a
+    /// final commit for what each had actually finished, before this method
+    /// returns — the default `rebalance()` driver (which calls
+    /// `pre_rebalance`) unassigns the partitions immediately afterwards, and
     /// a commit issued after that point would target a partition this
     /// consumer no longer owns.
+    ///
+    /// The whole call is bounded by a single `shutdown_timeout` deadline
+    /// shared across every revoked partition, not `shutdown_timeout` PER
+    /// partition: the default (eager) rebalance protocol revokes the
+    /// consumer's entire assignment in one `Revoke` event, and this method
+    /// must return promptly enough that librdkafka's group-membership
+    /// protocol doesn't evict this consumer for being unresponsive — an N
+    /// partition revoke must not be allowed to take N times as long as a
+    /// one-partition revoke.
     ///
     /// # Why the blocking wait below cannot deadlock
     ///
@@ -216,7 +225,7 @@ impl ListenerContext {
     /// its own task poll).
     ///
     /// Instead we block on a plain `std::sync::mpsc::Receiver::recv_timeout`,
-    /// bounded by `shutdown_timeout` — but wrapped in
+    /// bounded by the shared deadline above — but wrapped in
     /// `tokio::task::block_in_place`. That wrapper is load-bearing, not
     /// decorative: the partition worker we're waiting for is a separate
     /// tokio task, but tokio's work-stealing scheduler is free to run a
@@ -230,12 +239,27 @@ impl ListenerContext {
     /// off any task the scheduler had queued onto this thread (including a
     /// LIFO-slotted partition worker) to another worker thread before we
     /// block — so the worker we're waiting on is guaranteed to keep making
-    /// progress elsewhere. This requires (and asserts, via a panic) the
-    /// multi-thread runtime — true for every `#[oxide_boot::main]` app (see
-    /// `oxide-macros::main_macro`) and for this crate's own
-    /// `#[tokio::test(flavor = "multi_thread")]` integration tests. If the
-    /// worker still hasn't stopped within the budget we log and proceed
-    /// anyway, since the rebalance cannot be held up indefinitely.
+    /// progress elsewhere. This requires the multi-thread runtime — true
+    /// for every `#[oxide_boot::main]` app (see `oxide-macros::main_macro`)
+    /// and for this crate's own `#[tokio::test(flavor = "multi_thread")]`
+    /// integration tests; `build_consumer` asserts this loudly at boot
+    /// rather than letting it panic here on the first live rebalance. If
+    /// the worker still hasn't stopped within the deadline we log and
+    /// proceed anyway, since the rebalance cannot be held up indefinitely.
+    ///
+    /// The final per-partition commit below uses `CommitMode::Async`, not
+    /// `Sync`, for the same "must not block indefinitely" reason:
+    /// `CommitMode::Sync` waits for the broker to acknowledge the commit,
+    /// which — unlike the `recv_timeout` above — this codebase has no way
+    /// to bound (the call borrows `base_consumer` for the duration of this
+    /// callback, so it can't be moved onto `spawn_blocking` and raced
+    /// against a timeout the way the worker-completion wait is). An
+    /// unreachable coordinator at exactly the moment of a revoke would
+    /// otherwise hang this call — and therefore `pre_destroy` — for as long
+    /// as librdkafka's own (much larger) internal request timeouts allow.
+    /// `CommitMode::Async` only enqueues the commit request on librdkafka's
+    /// internal queue and returns immediately; the same per-message commit
+    /// in `commit_after_success` already uses it for the same reason.
     fn handle_revoke(&self, base_consumer: &rdkafka::consumer::BaseConsumer<Self>, tpl: &rdkafka::TopicPartitionList) {
         let mut stopped = Vec::new();
         {
@@ -248,14 +272,18 @@ impl ListenerContext {
                 }
             }
         }
+        // One deadline for the ENTIRE revoke (see doc comment above), not
+        // one `shutdown_timeout` budget per partition.
+        let deadline = Instant::now() + self.shutdown_timeout;
         for ((topic, partition), done_rx) in stopped {
+            let remaining = deadline.saturating_duration_since(Instant::now());
             // `Disconnected` (the worker task ended, dropping `done_tx`,
             // without ever sending on it — see `get_or_spawn_worker`) is
             // the EXPECTED, successful outcome, returned as soon as that
             // drop happens rather than only after the full timeout — only
             // `Timeout` is a genuine "still didn't stop in time".
             let timed_out = tokio::task::block_in_place(|| {
-                matches!(done_rx.recv_timeout(self.shutdown_timeout), Err(std::sync::mpsc::RecvTimeoutError::Timeout))
+                matches!(done_rx.recv_timeout(remaining), Err(std::sync::mpsc::RecvTimeoutError::Timeout))
             });
             if timed_out {
                 tracing::warn!(
@@ -277,7 +305,7 @@ impl ListenerContext {
                 tracing::error!(error = %e, topic = %topic, partition, "set_offset failed during rebalance revoke commit");
                 continue;
             }
-            if let Err(e) = base_consumer.commit(&commit_tpl, rdkafka::consumer::CommitMode::Sync) {
+            if let Err(e) = base_consumer.commit(&commit_tpl, rdkafka::consumer::CommitMode::Async) {
                 tracing::error!(error = %e, listener = self.listener_name, topic = %topic, partition, "offset commit failed during rebalance revoke");
             } else {
                 tracing::debug!(
@@ -342,6 +370,27 @@ fn build_consumer(
     commit_state: Arc<std::sync::Mutex<HashMap<(String, i32), i64>>>,
     shutdown_timeout: Duration,
 ) -> Result<Arc<StreamConsumer<ListenerContext>>, KafkaError> {
+    // `ListenerContext::handle_revoke` uses `tokio::task::block_in_place`
+    // (see its doc comment) to safely block the current tokio worker thread
+    // while waiting on a revoked partition's worker — a call that panics on
+    // a `current_thread` runtime. Asserting the runtime flavor here, at
+    // boot, turns that into a loud, immediate boot failure instead of a
+    // silent one on the first live rebalance (which would otherwise unwind
+    // out of `rebalance()` before `rd_kafka_assign` runs, and be swallowed
+    // as a `JoinError` by the listener's supervisor task). Every
+    // `#[oxide_boot::main]` app builds a multi-thread runtime (see
+    // `oxide-macros::main_macro`), so this only fires for a caller of the
+    // public `OxideApplication::builder()` API running on a `current_thread`
+    // runtime (e.g. a bare `#[tokio::test]` without `flavor = "multi_thread"`).
+    if tokio::runtime::Handle::current().runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+        return Err(KafkaError::Other(
+            "oxide-kafka listeners require a multi-thread tokio runtime (consumer-group rebalance \
+             handling blocks a worker thread via `tokio::task::block_in_place`, which panics on a \
+             current_thread runtime); build the app on `tokio::runtime::Builder::new_multi_thread()` \
+             (what `#[oxide_boot::main]` already does) or `#[tokio::test(flavor = \"multi_thread\")]`"
+                .to_string(),
+        ));
+    }
     let config = props.client_config(&[
         ("group.id", group.to_string()),
         ("enable.auto.commit", "false".to_string()),
@@ -425,19 +474,43 @@ async fn supervised_loop(
                             // rebalance revoke raced with this message (the
                             // revoke removes the registry entry and cancels
                             // the worker, which then closes its channel).
-                            // Drop the stale entry and spawn a fresh worker
-                            // so this partition keeps making progress
-                            // instead of stalling, or (as before this fix)
-                            // taking the whole listener down.
                             active.lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
-                            let sender = get_or_spawn_worker(key.clone());
-                            if sender.send(rejected.0).await.is_err() {
-                                tracing::error!(
+                            // Only respawn if `key` is STILL in this
+                            // consumer's current assignment. In principle
+                            // `consumer.recv()` never yields a record for a
+                            // partition this consumer doesn't currently own,
+                            // so reaching this branch at all should already
+                            // imply that — but that argument lives in
+                            // librdkafka's internals, not in this file, and
+                            // this exact routing path is a prime candidate
+                            // for Task 19's restructuring. `assignment()` is
+                            // a cheap local read (no network I/O), so check
+                            // it explicitly rather than resting on that
+                            // argument: respawning a worker for a partition
+                            // we no longer own would let it commit for that
+                            // partition, which is the exact bug this file
+                            // exists to prevent.
+                            let still_assigned = consumer
+                                .assignment()
+                                .map(|tpl| tpl.elements().iter().any(|e| e.topic() == key.0 && e.partition() == key.1))
+                                .unwrap_or(false);
+                            if !still_assigned {
+                                tracing::warn!(
                                     listener = listener_name,
                                     topic = %key.0,
                                     partition = key.1,
-                                    "failed to route a record to a freshly spawned partition worker; dropping it"
+                                    "dropping a record for a partition worker that exited and is no longer assigned to this consumer"
                                 );
+                            } else {
+                                let sender = get_or_spawn_worker(key.clone());
+                                if sender.send(rejected.0).await.is_err() {
+                                    tracing::error!(
+                                        listener = listener_name,
+                                        topic = %key.0,
+                                        partition = key.1,
+                                        "failed to route a record to a freshly spawned partition worker; dropping it"
+                                    );
+                                }
                             }
                         }
                     }
@@ -629,7 +702,7 @@ async fn run_with_retry(
 /// records the committed offset in `commit_state` so a final synchronous
 /// commit can flush it on shutdown (see `supervised_loop`).
 fn commit_after_success(
-    consumer: &Arc<StreamConsumer<ListenerContext>>,
+    consumer: &StreamConsumer<ListenerContext>,
     topic: &str,
     partition: i32,
     offset: i64,
@@ -651,23 +724,22 @@ fn commit_after_success(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert((topic.to_string(), partition), next_offset);
-    // `rd_kafka_commit` (even in `Async` mode, which only enqueues the
-    // request rather than waiting for the broker) still briefly needs an
-    // internal librdkafka lock that a concurrently-dispatching rebalance
-    // callback on the polling thread also holds for its whole duration —
-    // so a call here CAN stall for a while whenever a rebalance happens to
-    // be in flight. Running it via `spawn_blocking`, off this worker's own
-    // task, keeps that possible stall from ever delaying this worker
-    // noticing a cancellation and exiting (which is what the bounded wait
-    // in `handle_revoke` depends on) — matching the "fire-and-forget" async
-    // semantics this already had.
-    let consumer = consumer.clone();
-    let topic_owned = topic.to_string();
-    tokio::task::spawn_blocking(move || {
-        if let Err(e) = consumer.commit(&tpl, rdkafka::consumer::CommitMode::Async) {
-            tracing::error!(error = %e, topic = %topic_owned, partition, offset, "offset commit failed");
-        }
-    });
+    // Issued inline, synchronously (this only enqueues the op —
+    // `CommitMode::Async` does not wait for the broker). Deliberately NOT
+    // moved onto `spawn_blocking`: independent blocking tasks give no
+    // ordering guarantee relative to each other or to
+    // `ListenerContext::handle_revoke`'s own final commit, so a
+    // late-running fan-out task for an EARLIER offset could commit after
+    // (and thus undo) a revoke's final commit for a LATER offset, moving
+    // the committed offset backwards and causing the new partition owner
+    // to reprocess records — the exact bug this file exists to prevent.
+    // `rd_kafka_commit(async=1)` only enqueues the op onto librdkafka's
+    // internal queue, it does not contend with a concurrently-dispatching
+    // rebalance callback (which does not hold a lock for its duration), so
+    // there is no stall here to avoid in the first place.
+    if let Err(e) = consumer.commit(&tpl, rdkafka::consumer::CommitMode::Async) {
+        tracing::error!(error = %e, topic = %topic, partition, offset, "offset commit failed");
+    }
 }
 
 inventory::submit! {
@@ -814,8 +886,13 @@ inventory::submit! {
             for run in runs {
                 run.cancellation.cancel();
                 // Wait for the supervisor (and, transitively, its in-flight
-                // partition workers) to finish draining.
-                let _ = run.supervisor.await;
+                // partition workers) to finish draining. A panicked
+                // supervisor task means shutdown did NOT actually drain and
+                // commit as expected — log it rather than silently treating
+                // this listener as cleanly stopped.
+                if let Err(e) = run.supervisor.await {
+                    tracing::error!(listener = run.name, error = %e, "kafka listener supervisor task panicked during shutdown");
+                }
                 tracing::info!(listener = run.name, "kafka listener stopped");
             }
             Ok(())
