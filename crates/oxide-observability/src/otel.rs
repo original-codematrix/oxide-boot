@@ -171,42 +171,86 @@ pub(crate) fn shutdown() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 /// order among order-0 components) into an explicit guarantee.
 pub struct OtelLifecycle {}
 
+/// Runs `work` on a plain, detached `std::thread::spawn` — deliberately NOT
+/// `tokio::task::spawn_blocking` — bounded by `timeout`, and reports which
+/// of the two happened first.
+///
+/// `spawn_blocking` was the first attempt for `OtelLifecycle::flush` below,
+/// wrapped in `tokio::time::timeout`, but it does not actually solve the
+/// problem it looks like it solves: tokio tracks every outstanding
+/// `spawn_blocking` task, and `Runtime::drop` blocks until each one
+/// finishes, however long that takes — `timeout` only stops *awaiting* the
+/// task's `JoinHandle`, it does not stop the task itself, which keeps
+/// running on tokio's blocking-thread pool regardless. `#[oxide_boot::main]`
+/// (`crates/oxide-macros/src/main_macro.rs`) builds the `Runtime` as a
+/// temporary and drops it immediately after `block_on` returns, so a
+/// `spawn_blocking`-based `flush` would bound only `stop()`'s return while
+/// the *process* then hangs at exit waiting for that same runtime-tracked
+/// task — the exact failure mode this module exists to prevent, just moved
+/// one step later, past the point where anyone is still watching for it.
+///
+/// A plain OS thread from `std::thread::spawn` is invisible to the tokio
+/// runtime, so nothing waits for it: on timeout, that thread is
+/// deliberately leaked — abandoned mid-shutdown, running (or permanently
+/// hung) in the background for as long as the process happens to stay
+/// alive. That is the right trade at shutdown: a leaked thread costs
+/// nothing once the process has exited, whereas an indefinitely blocked
+/// exit costs everything. The result is delivered back over a `oneshot`
+/// channel — awaited by `timeout`, not the thread's (nonexistent) handle.
+async fn run_detached_with_timeout<T, F>(
+    timeout: std::time::Duration,
+    work: F,
+) -> Result<Option<T>, tokio::sync::oneshot::error::RecvError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        // `send` fails only if `rx` was already dropped, i.e. the timeout
+        // below already fired and moved on — nothing left to deliver the
+        // result to, so ignoring the error here is correct.
+        let _ = tx.send(work());
+    });
+
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(value)) => Ok(Some(value)),
+        Ok(Err(recv_error)) => Err(recv_error),
+        Err(_elapsed) => Ok(None),
+    }
+}
+
 impl OtelLifecycle {
     /// `TracerProvider::shutdown` is a *synchronous*, blocking call — it
     /// waits (via `futures_executor::block_on`, not a tokio-aware await) for
-    /// the batch processor's background task to drain and reply. That
-    /// background task is itself scheduled on the tokio runtime, so calling
-    /// `shutdown()` directly from this async hook would monopolize the
-    /// runtime's only worker thread on a single-threaded (e.g. `#[tokio::
-    /// test]`-default) runtime and deadlock. `spawn_blocking` moves the
-    /// blocking wait to a dedicated thread, leaving the async worker free to
-    /// keep driving the background task.
-    ///
-    /// The blocking wait is additionally bounded by
-    /// `oxide.otel.shutdown-timeout-seconds` (default 10) via
-    /// `tokio::time::timeout`: a hung or unreachable OTLP collector must
-    /// never block application shutdown. On timeout this logs a warning
-    /// naming the endpoint and the configured timeout, then returns `Ok(())`
-    /// — shutdown continues either way, it never hangs and never fails
-    /// `stop()`.
+    /// the batch processor's background task to drain and reply. That wait
+    /// runs via [`run_detached_with_timeout`] (see its doc comment for why
+    /// a detached thread, not `spawn_blocking`), bounded by
+    /// `oxide.otel.shutdown-timeout-seconds` (default 10): a hung or
+    /// unreachable OTLP collector must never block application shutdown —
+    /// nor, per `run_detached_with_timeout`, delay process exit afterwards.
+    /// On timeout this logs a warning naming the endpoint and the
+    /// configured timeout, then returns `Ok(())` — shutdown continues
+    /// either way, it never hangs and never fails `stop()`.
     async fn flush(&self, config: &AppConfig) -> oxide_core::ComponentResult<()> {
         let props: OtelProps = config.get_opt("oxide.otel")?.unwrap_or_default();
         let timeout = std::time::Duration::from_secs(props.shutdown_timeout_seconds);
 
-        match tokio::time::timeout(timeout, tokio::task::spawn_blocking(shutdown)).await {
-            Ok(join_result) => {
-                join_result??;
+        match run_detached_with_timeout(timeout, shutdown).await {
+            Ok(Some(result)) => {
+                result?;
                 Ok(())
             }
-            Err(_) => {
+            Ok(None) => {
                 let endpoint = props.endpoint.as_deref().unwrap_or("<unconfigured>");
                 tracing::warn!(
                     endpoint,
                     timeout_seconds = props.shutdown_timeout_seconds,
-                    "OTel tracer provider shutdown did not complete within the configured timeout; continuing shutdown"
+                    "OTel tracer provider shutdown did not complete within the configured timeout; continuing shutdown, the shutdown thread is left to finish in the background"
                 );
                 Ok(())
             }
+            Err(_recv_error) => Err("OTel shutdown thread dropped its result sender without completing".into()),
         }
     }
 }
@@ -304,22 +348,40 @@ pub mod testing {
         exporter
     }
 
-    /// Wraps `InMemorySpanExporter` but makes `shutdown()` block for `delay`
-    /// (a real, synchronous `std::thread::sleep`, matching how a hung OTLP
-    /// collector would block the real exporter's `shutdown()`). Used by
-    /// `tests/otel_shutdown_timeout.rs` to prove `OtelLifecycle::flush`
-    /// bounds that wait with `oxide.otel.shutdown-timeout-seconds` instead
-    /// of hanging application shutdown indefinitely.
+    /// Wraps `InMemorySpanExporter` but makes `export()` hang for `delay`
+    /// via a real `tokio::time::sleep` before forwarding — standing in for a
+    /// hung/unreachable OTLP collector's network response, i.e. an
+    /// unbounded `.await` deep inside `BatchSpanProcessor`'s own background
+    /// task, not a synchronous blocking call.
+    ///
+    /// This is deliberately an async hang (`tokio::time::sleep`), not a
+    /// synchronous one (`std::thread::sleep`): a synchronous hang blocks
+    /// whichever worker thread happens to be running that task's poll,
+    /// which `Runtime::drop` must then wait to reclaim regardless of what
+    /// `OtelLifecycle::flush` does — that would conflate a limitation of a
+    /// misbehaving exporter with what this module is responsible for. An
+    /// async hang instead genuinely suspends at an `.await` point, which is
+    /// what a real stalled network call looks like, and it's the case
+    /// `OtelLifecycle::flush`'s timeout is actually meant to bound: the
+    /// `BatchSpanProcessor` background task's `flush()` never completes, so
+    /// it never replies on the response channel `TracerProvider::shutdown`
+    /// blocks on — exactly the wait `tests/otel_shutdown_timeout.rs` proves
+    /// gets cut short instead of delaying either `stop()` or process exit.
     #[derive(Clone, Debug)]
-    struct HungShutdown(InMemorySpanExporter, std::time::Duration);
+    struct HungExport(InMemorySpanExporter, std::time::Duration);
 
-    impl SpanExporter for HungShutdown {
+    impl SpanExporter for HungExport {
         fn export(&mut self, batch: Vec<SpanData>) -> BoxFuture<'static, ExportResult> {
-            self.0.export(batch)
+            let delay = self.1;
+            let inner = self.0.export(batch);
+            Box::pin(async move {
+                tokio::time::sleep(delay).await;
+                inner.await
+            })
         }
 
         fn shutdown(&mut self) {
-            std::thread::sleep(self.1);
+            self.0.shutdown();
         }
 
         fn set_resource(&mut self, resource: &Resource) {
@@ -327,13 +389,14 @@ pub mod testing {
         }
     }
 
-    /// Installs a tracer provider whose exporter's `shutdown()` blocks for
+    /// Installs a tracer provider whose exporter's `export()` hangs for
     /// `delay` before returning, simulating a hung/unreachable OTLP
-    /// collector. Call this BEFORE booting the app, same as
-    /// [`install_in_memory`].
-    pub fn install_in_memory_with_hung_shutdown(delay: std::time::Duration) -> InMemorySpanExporter {
+    /// collector. Call this from inside a running Tokio runtime (needed by
+    /// `BatchSpanProcessor::new`'s `runtime::Tokio` integration), before
+    /// booting the app — same as [`install_in_memory`].
+    pub fn install_in_memory_with_hung_export(delay: std::time::Duration) -> InMemorySpanExporter {
         let exporter = InMemorySpanExporter::default();
-        let provider = super::build_provider(HungShutdown(exporter.clone(), delay), "otel-test".into(), 1.0);
+        let provider = super::build_provider(HungExport(exporter.clone(), delay), "otel-test".into(), 1.0);
         super::install(provider);
         exporter
     }
@@ -383,5 +446,52 @@ mod tests {
     fn otel_props_deserialize_reads_kebab_case_sample_ratio_key() {
         let props: OtelProps = serde_json::from_str(r#"{"sample-ratio": 0.25}"#).expect("kebab key should bind");
         assert_eq!(props.sample_ratio, 0.25);
+    }
+
+    /// Isolates the exact mechanism `OtelLifecycle::flush` relies on —
+    /// `run_detached_with_timeout` — from all of `opentelemetry_sdk`'s own
+    /// task-cancellation behaviour, which turned out to obscure the
+    /// difference between `spawn_blocking` and a detached `std::thread` in
+    /// `tests/otel_shutdown_timeout.rs`'s full-stack scenario (a genuinely
+    /// hung `export()` there gets cancelled promptly by `Runtime::drop`
+    /// itself once the background task is dropped, so *both*
+    /// implementations happened to return quickly — that test proves the
+    /// realistic "hung network export" case stays bounded, but it does not
+    /// by itself prove this specific implementation choice matters).
+    ///
+    /// This test instead reproduces the reviewer's own repro shape
+    /// directly: a plain closure that blocks for far longer than the
+    /// timeout, via `std::thread::sleep` — uncancellable by construction,
+    /// exactly like a raw `tokio::task::spawn_blocking(|| thread::sleep(..))`
+    /// would be. Building and dropping a `Runtime` by hand (the same shape
+    /// `#[oxide_boot::main]`'s generated `fn main` has) and timing the whole
+    /// `block_on` + `drop` sequence is what actually pins the guarantee:
+    /// with `tokio::task::spawn_blocking` in place of
+    /// `std::thread::spawn` here, `Runtime::drop` would block for the
+    /// closure's full sleep duration (reproduced by hand while writing this
+    /// test: swapping `std::thread::spawn` for
+    /// `tokio::task::spawn_blocking` — spawned, then its `JoinHandle`
+    /// raced against the timeout — made this assertion fail at ~3s instead
+    /// of returning within the 1s bound).
+    #[test]
+    fn run_detached_with_timeout_does_not_delay_runtime_drop_when_the_closure_hangs() {
+        let closure_delay = std::time::Duration::from_secs(3);
+        let bound = std::time::Duration::from_millis(300);
+
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("build tokio runtime");
+
+        let started = std::time::Instant::now();
+        let outcome = runtime.block_on(run_detached_with_timeout(bound, move || {
+            std::thread::sleep(closure_delay);
+            "done"
+        }));
+        assert_eq!(outcome, Ok(None), "expected the timeout branch, not the closure's result");
+        drop(runtime);
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "block_on+drop took {elapsed:?}, expected well under the closure's {closure_delay:?} sleep — at or              near that duration would mean the detached thread is (again) blocking runtime teardown, i.e. the              regression `run_detached_with_timeout` exists to prevent"
+        );
     }
 }
