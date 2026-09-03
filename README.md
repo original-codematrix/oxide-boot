@@ -73,6 +73,8 @@ make ci       # everything below
 make check    # fmt --check, clippy -D warnings, cargo test --workspace
 make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
 make msrv     # cargo +1.88 check --workspace --all-targets, against the declared MSRV
+make loadtest # release build of the rest-api example under k6 (see below)
+make clean    # cargo clean -- `target/` is the only thing here that grows without bound
 ```
 
 `make msrv` needs the 1.88 toolchain installed once:
@@ -84,6 +86,34 @@ rustup toolchain install 1.88
 Policy lives in `deny.toml`: RUSTSEC advisories fail the build, licenses must be
 on the allowlist (permissive only, no copyleft), and every ignored advisory needs
 a written reason next to it.
+
+Debug builds are configured for size: dependencies are compiled without debug
+info and workspace crates keep line tables only (`[profile.dev]` in the root
+`Cargo.toml`). Backtraces and test panic locations still resolve to file and
+line; the default settings produced a 61 GB `target/` on a full workspace test
+build.
+
+### Load test
+
+`make loadtest` builds the `rest-api` example in release, starts a Redpanda
+broker (the `POST` handler publishes to `notes-events`, so a run without a
+broker would only measure the error path), waits for `/actuator/health` the way
+a kubelet would, and drives it with [k6]. The scenario covers a plain read, a
+write that also produces to Kafka, a path-parameter read, a deliberate miss
+asserted to be RFC 7807 `problem+json`, and the health endpoint. Thresholds
+(`http_req_failed < 1%`, `p95 < 250 ms`, `p99 < 1 s`) fail the run, so it is
+usable as a regression gate and not just a report.
+
+```sh
+make loadtest                       # 50 VUs, 30s
+VUS=200 DURATION=2m make loadtest   # knobs: VUS, DURATION, APP_PORT, MGMT_PORT, KAFKA_PORT
+```
+
+Artefacts land in `target/loadtest/` (`app.log`, `summary.json`), and the run
+prints the framework's own `/actuator/prometheus` counters next to k6's
+client-side numbers. Requires `docker` and `k6`.
+
+[k6]: https://k6.io
 
 ## Web (oxide-web)
 

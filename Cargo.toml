@@ -74,3 +74,19 @@ opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.33"
+
+# Debug artefacts dominate `target/`: a full workspace test build with the
+# default settings reached 61 GB, ~42 GB of it debug info in `debug/deps`.
+# Dependencies are never stepped through, so they are built without debug info;
+# workspace crates keep line tables, which is what backtraces and `cargo test`
+# panic locations actually read.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Line tables in release too, so `perf`/`samply` flamegraphs from a load test
+# resolve to file and line without changing codegen.
+[profile.release]
+debug = "line-tables-only"
