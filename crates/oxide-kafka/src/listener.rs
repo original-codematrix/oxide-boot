@@ -415,13 +415,19 @@ inventory::submit! {
                 let mut runs = Vec::new();
                 let retry = props.consumer.retry.clone();
                 for (descriptor, handler, group) in listeners {
-                    // A broker-connectivity/config problem here (e.g. an
-                    // unreachable `bootstrap.servers`) is a boot-time
-                    // failure, not a recoverable per-listener condition, so
-                    // it propagates out of `post_construct` as a
-                    // `ContextError::Construct` (via the `?` on the
-                    // `KafkaError` -> boxed-error conversion) rather than
-                    // being logged-and-skipped like a subscribe failure.
+                    // A consumer config problem here (e.g. an invalid
+                    // librdkafka option) is a boot-time failure, not a
+                    // recoverable per-listener condition, so it propagates
+                    // out of this `post_construct` hook (via `?` on the
+                    // `KafkaError` -> boxed-error conversion) as a
+                    // `BootError::PostConstruct` — NOT `ContextError`, since
+                    // `construct` has already finished by the time
+                    // `post_construct` hooks run (see `oxide_core::assemble`)
+                    // — rather than being logged-and-skipped like a subscribe
+                    // failure. Note this does NOT fire for a merely
+                    // unreachable broker: `create_with_context` connects
+                    // lazily, same as `KafkaProducer::new` (see its doc
+                    // comment in `producer.rs`).
                     let consumer = build_consumer(&props, &group, &props.consumer.auto_offset_reset)?;
                     if let Err(e) = consumer.subscribe(&[descriptor.topic]) {
                         tracing::error!(error = %e, topic = descriptor.topic, "listener subscribe failed");

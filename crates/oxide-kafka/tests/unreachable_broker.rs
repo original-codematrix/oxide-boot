@@ -1,55 +1,54 @@
-//! Integration test binary: boots against a `bootstrap-servers` that nothing
-//! is listening on. This must fail `start()` with a `BootError`, not panic
-//! the test process — Task 11 (turn panics into errors).
+//! Integration test binary: boots against a `bootstrap-servers` nothing is
+//! listening on. Pins the REAL contract (Task 11, fix round 1): `rdkafka`
+//! connects lazily, so an unreachable broker must NOT fail boot — that
+//! would turn a broker outage (e.g. mid Kubernetes rollout) into a crash
+//! loop for a condition the pod would otherwise recover from. The crate's
+//! own `kafka` health indicator (`oxide-kafka/src/health.rs`) is the
+//! intended way to observe this: it reports the `kafka` component `DOWN`
+//! on `/actuator/health` while the app keeps serving everything else.
 //!
-//! Deliberately does NOT use `harness::` (no Redpanda container needed): the
-//! whole point is that no broker is reachable. A dummy listener is declared
-//! so `oxide-kafka`'s inventory-registered components (`KafkaProducer`,
-//! `KafkaListenerManager`) actually link into and run in this test binary —
-//! without any reference into the crate, nothing would force the linker to
-//! pull in its `inventory::submit!` registrations.
+//! Deliberately does NOT use `harness::` (no Redpanda container needed):
+//! the whole point is that no broker is reachable. `127.0.0.1:1` is used
+//! rather than binding-and-dropping an ephemeral port — port 1 is
+//! privileged/reserved and deterministically has nothing listening,
+//! without a bind/drop race.
 
 use oxide_boot::OxideApplication;
-use oxide_kafka::kafka_listeners;
-use serde::{Deserialize, Serialize};
+use oxide_kafka::KafkaProducer;
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize)]
-struct Ev {
-    #[allow(dead_code)]
-    id: u32,
-}
-
-#[oxide_boot::component]
-struct DummyListener {
-    #[default]
-    _marker: bool,
-}
-
-#[kafka_listeners]
-impl DummyListener {
-    #[kafka_listener(topic = "unreachable-broker-test")]
-    async fn on_event(&self, _ev: Ev) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-/// Binds an ephemeral local port and immediately drops the listener, so the
-/// returned port is very likely free but nothing is listening on it.
-fn unreachable_bootstrap_servers() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    let port = listener.local_addr().expect("local_addr").port();
-    drop(listener);
-    format!("127.0.0.1:{port}")
+fn test_config_dir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("application.yml"),
+        "oxide:\n  server:\n    port: 0\n  management:\n    port: 0\n  kafka:\n    bootstrap-servers: \"127.0.0.1:1\"\n",
+    )
+    .expect("write application.yml");
+    dir
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn unreachable_broker_fails_boot_instead_of_panicking() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let yml = format!("oxide:\n  kafka:\n    bootstrap-servers: \"{}\"\n", unreachable_bootstrap_servers());
-    std::fs::write(dir.path().join("application.yml"), yml).expect("write application.yml");
+async fn unreachable_broker_boots_without_panicking() {
+    let dir = test_config_dir();
 
-    let result = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await;
+    let app = OxideApplication::builder().base_dir(dir.path()).env(HashMap::new()).start().await;
+    let app = app.expect("boot must succeed against an unreachable-but-syntactically-valid broker");
 
-    assert!(result.is_err(), "expected boot to fail with an error, not panic or succeed");
+    // `KafkaProducer` construction itself does not probe the broker (see its
+    // doc comment) — it's present in the context regardless of reachability.
+    assert!(app.context().get::<KafkaProducer>().is_some(), "KafkaProducer must still be constructed");
+
+    let mgmt_addr = app.context().get::<oxide_web::ManagementServer>().unwrap().local_addr().unwrap();
+    let body: serde_json::Value =
+        reqwest::get(format!("http://{mgmt_addr}/actuator/health")).await.unwrap().json().await.unwrap();
+    // `oxide.management.health.show-details` defaults to "never", so only
+    // the per-component status (not the driver error `detail`) is visible
+    // here; `health` is exposed by default (`oxide.management.endpoints.exposure`).
+    assert_eq!(
+        body["components"]["kafka"]["status"],
+        serde_json::json!("DOWN"),
+        "kafka health indicator must report DOWN against an unreachable broker: {body}"
+    );
+
+    app.stop().await.expect("clean shutdown even though the broker was never reachable");
 }

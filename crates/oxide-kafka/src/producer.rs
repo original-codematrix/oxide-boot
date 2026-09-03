@@ -28,13 +28,16 @@ pub struct KafkaProducer {
     producer: FutureProducer,
 }
 
-/// Bound on the boot-time broker-reachability check in [`KafkaProducer::new`].
-/// `fetch_metadata` is a blocking librdkafka call; this keeps a permanently
-/// unreachable `bootstrap.servers` from stalling boot indefinitely while
-/// still tolerating an ordinary broker's normal metadata-response latency.
-const METADATA_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-
 impl KafkaProducer {
+    /// `create()` only builds the client handle and validates config —
+    /// librdkafka connects lazily in the background, so an unreachable
+    /// `bootstrap.servers` is NOT surfaced here. That's intentional: a
+    /// broker that is merely unreachable (e.g. mid Kubernetes rollout) must
+    /// not fail boot — the crate's own `kafka` health indicator already
+    /// reports `DOWN` for exactly this case, and a consumer-only app that
+    /// never sends should not pay for producer connectivity at all. Only a
+    /// genuinely invalid client config (caught by `create()` itself, e.g. a
+    /// bad `oxide.kafka.properties` passthrough value) fails boot.
     fn new(props: &KafkaProps) -> Result<Self, KafkaError> {
         let config = props.client_config(&[
             ("enable.idempotence", props.producer.idempotence.to_string()),
@@ -43,17 +46,6 @@ impl KafkaProducer {
             ("message.send.max.retries", "2147483647".to_string()),
         ]);
         let producer: FutureProducer = config.create().map_err(|source| KafkaError::Client { source })?;
-        // `create()` only builds the client handle — librdkafka connects
-        // lazily in the background, so an unreachable `bootstrap.servers`
-        // would otherwise go unnoticed until the first send/consume, well
-        // after boot reported success. A synchronous metadata fetch forces
-        // (and bounds) that first connection attempt here, so a
-        // misconfigured or unreachable broker fails boot instead of being
-        // logged-and-retried forever by a listener supervisor.
-        producer
-            .client()
-            .fetch_metadata(None, Timeout::After(METADATA_FETCH_TIMEOUT))
-            .map_err(|source| KafkaError::Client { source })?;
         Ok(Self { producer })
     }
 
