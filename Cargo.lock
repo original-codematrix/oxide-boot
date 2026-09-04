@@ -2255,6 +2255,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-kafka-test"
+version = "0.1.0"
+dependencies = [
+ "oxide-boot",
+ "oxide-kafka",
+ "oxide-test",
+ "rdkafka",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "oxide-macros"
 version = "0.1.0"
 dependencies = [
@@ -2293,6 +2307,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "oxide-mongo-test"
+version = "0.1.0"
+dependencies = [
+ "mongodb",
+ "oxide-boot",
+ "oxide-mongo",
+ "oxide-test",
+ "serde",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2338,6 +2365,18 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "oxide-redis-test"
+version = "0.1.0"
+dependencies = [
+ "oxide-boot",
+ "oxide-redis",
+ "oxide-test",
+ "serde",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

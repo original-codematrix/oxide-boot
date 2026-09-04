@@ -737,6 +737,9 @@ so no extra quoting is needed for the common case.
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient` | `#[http_client]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |
+| `@DataMongoTest` / `@DataRedisTest` / `@EmbeddedKafka` | `MongoTest::start()` / `RedisTest::start()` / `KafkaTest::start()` |
+| Beans of one interface as `List<T>` | `ctx.get_all::<dyn T>()` via `#[component(provides(T))]` |
+| Micrometer meter pre-registration | `MetricRegistration::counter(...)` |
 
 ### Starter coverage
 
@@ -760,8 +763,15 @@ not, and the gap is worth knowing before betting on this:
 | `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
 
 Also missing from the DI container itself: `@Import`-style explicit
-configuration classes, injection by trait (only concrete types resolve),
-`@MockBean`-style replacement in tests, and pagination in derived queries.
+configuration classes, `@Autowired("beanName")` qualifiers (resolution is by
+type, so one type means one instance), `@MockBean`-style replacement in tests,
+and pagination in derived queries.
+
+Injection by trait *is* now supported: `#[component(provides(Notifier))]`
+registers a component under a trait as well as its concrete type, and
+`ctx.get_all::<dyn Notifier>()` returns every implementation — the equivalent
+of injecting `List<Notifier>`. `get_one` resolves a sole implementation and
+returns `None` rather than choosing when there are several.
 
 ### Sizing this for Kubernetes
 

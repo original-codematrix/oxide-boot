@@ -12,6 +12,9 @@ members = [
     "crates/oxide-mongo",
     "crates/oxide-mongo-macros",
     "crates/oxide-redis",
+    "crates/oxide-redis-test",
+    "crates/oxide-mongo-test",
+    "crates/oxide-kafka-test",
     "crates/oxide-client",
     "crates/oxide-client-macros",
     "crates/oxide-test",
@@ -44,6 +47,9 @@ oxide-kafka-macros = { path = "crates/oxide-kafka-macros", version = "0.1.0" }
 oxide-mongo = { path = "crates/oxide-mongo", version = "0.1.0" }
 oxide-mongo-macros = { path = "crates/oxide-mongo-macros", version = "0.1.0" }
 oxide-redis = { path = "crates/oxide-redis", version = "0.1.0" }
+oxide-redis-test = { path = "crates/oxide-redis-test", version = "0.1.0" }
+oxide-mongo-test = { path = "crates/oxide-mongo-test", version = "0.1.0" }
+oxide-kafka-test = { path = "crates/oxide-kafka-test", version = "0.1.0" }
 oxide-client = { path = "crates/oxide-client", version = "0.1.0" }
 oxide-client-macros = { path = "crates/oxide-client-macros", version = "0.1.0" }
 oxide-test = { path = "crates/oxide-test", version = "0.1.0" }

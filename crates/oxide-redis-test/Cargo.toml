@@ -1,0 +1,18 @@
+[package]
+name = "oxide-redis-test"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+oxide-boot.workspace = true
+oxide-redis.workspace = true
+oxide-test = { workspace = true, features = ["containers"] }
+tempfile.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+tokio.workspace = true
