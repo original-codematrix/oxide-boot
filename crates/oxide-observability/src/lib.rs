@@ -13,9 +13,11 @@ mod logging;
 mod metrics;
 pub mod otel;
 pub mod process;
+pub mod registry;
 
 pub use crate::metrics::prometheus_handle;
 pub use crate::process::ProcessMetricsProps;
+pub use crate::registry::{MetricKind, MetricRegistration, RequestField, record_request_field};
 
 use oxide_boot::component;
 

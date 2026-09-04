@@ -32,6 +32,15 @@ pub(crate) async fn observe(req: axum::extract::Request, next: axum::middleware:
         http.method = %method,
         http.route = %route,
         http.status_code = tracing::field::Empty,
+        // Reserved slots a handler can fill via
+        // `registry::record_request_field`. tracing fixes a span's fields at
+        // creation and needs literal names, so they have to be declared here
+        // -- empty until something records into them, and then absent from
+        // the output rather than rendered as null.
+        oxide.tenant = tracing::field::Empty,
+        oxide.principal = tracing::field::Empty,
+        oxide.entity = tracing::field::Empty,
+        oxide.detail = tracing::field::Empty,
     );
     let parent = opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&HeaderCarrier(req.headers())));
     // `set_parent` (tracing-opentelemetry 0.33+) returns a `Result`,
