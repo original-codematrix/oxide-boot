@@ -736,6 +736,7 @@ so no extra quoting is needed for the common case.
 | `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (strings, hashes, lists, sets, TTL, `pipeline`) |
 | `@RedisHash` + `CrudRepository` | `RedisRepository<T>` + `RedisEntity` |
 | `@Cacheable` | `#[cacheable(cache = "notes", key = "id")]` |
+| `@Scheduled(cron = ...)` | `#[scheduled(cron = "0 0 3 * * *")]` inside `#[scheduled_tasks]` |
 | `CacheManager` / `opsForValue` | `CacheManager::get("name")` → raw or typed access |
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient` | `#[http_client]` |
@@ -771,7 +772,7 @@ not, and the gap is worth knowing before betting on this:
 | `spring-boot-starter-security` | — | ❌ no authn/authz at all |
 | `spring-boot-starter-data-jpa` / JDBC | — | ❌ no SQL support |
 | `spring-boot-starter-cache` (`@Cacheable`) | `oxide-cache` | ✅ named caches, in-memory + Redis backends |
-| `@Scheduled` / `spring-boot-starter-quartz` | — | ❌ no scheduler |
+| `@Scheduled` / `spring-boot-starter-quartz` | `oxide-scheduler` | ✅ cron, fixed delay, fixed rate — not distributed |
 | `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
 
 Still missing from the DI container: `@Import`-style explicit configuration

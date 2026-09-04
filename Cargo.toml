@@ -14,6 +14,8 @@ members = [
     "crates/oxide-cache",
     "crates/oxide-cache-macros",
     "crates/oxide-redis",
+    "crates/oxide-scheduler",
+    "crates/oxide-scheduler-macros",
     "crates/oxide-redis-test",
     "crates/oxide-mongo-test",
     "crates/oxide-kafka-test",
@@ -52,6 +54,8 @@ oxide-mongo-macros = { path = "crates/oxide-mongo-macros", version = "0.1.0" }
 oxide-cache = { path = "crates/oxide-cache", version = "0.1.0" }
 oxide-cache-macros = { path = "crates/oxide-cache-macros", version = "0.1.0" }
 oxide-redis = { path = "crates/oxide-redis", version = "0.1.0" }
+oxide-scheduler = { path = "crates/oxide-scheduler", version = "0.1.0" }
+oxide-scheduler-macros = { path = "crates/oxide-scheduler-macros", version = "0.1.0" }
 oxide-redis-test = { path = "crates/oxide-redis-test", version = "0.1.0" }
 oxide-mongo-test = { path = "crates/oxide-mongo-test", version = "0.1.0" }
 oxide-kafka-test = { path = "crates/oxide-kafka-test", version = "0.1.0" }
@@ -110,6 +114,8 @@ redis = { version = "1", default-features = false, features = [
     "tls-rustls-webpki-roots",
 ] }
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+croner = "4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 opentelemetry = "0.32"
