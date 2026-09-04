@@ -44,7 +44,9 @@ BUSY=$(LC_ALL=C awk -v l="$LOAD" -v c="$CORES" 'BEGIN { print (l > c * 0.3) ? 1 
 if [[ "$BUSY" == "1" ]]; then
   echo "WARNING: load average is $LOAD on $CORES cores before this run even starts." >&2
   echo "         Whatever else is running will be measured along with the service." >&2
-  LC_ALL=C ps -Ao pcpu,comm -r 2>/dev/null | head -6 | sed 's/^/         /' >&2
+  # `|| true`: head closing the pipe early makes ps die of SIGPIPE, which
+  # under `pipefail` aborts the script with 141 instead of printing a warning.
+  { LC_ALL=C ps -Ao pcpu,comm -r 2>/dev/null | head -6 | sed 's/^/         /' >&2; } || true
   echo "         Set ALLOW_BUSY=1 to run anyway." >&2
   [[ "${ALLOW_BUSY:-0}" == "1" ]] || exit 1
 fi

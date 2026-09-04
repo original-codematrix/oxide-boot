@@ -145,6 +145,34 @@ offered load and handled load sit on the same axis. Nothing here goes near
 Kubernetes: the backing services are local containers and the service itself
 runs on the host from a release build.
 
+`make capacity` answers "how much, and at what cost" in one table: HTTP alone,
+Kafka alone, and both at once, differing only in which load is applied.
+Measured on one replica, service and backing services in one docker network,
+100 VUs, a 300k-message backlog left standing, 2,000 msg/s injected throughout:
+
+| scenario | HTTP req/s | p50 / p95 | Kafka msg/s | CPU avg | CPU peak | RSS peak |
+|---|---|---|---|---|---|---|
+| HTTP only | **15,804** | 4.4 / 12.2 ms | 944¹ | 2.03 cores | 2.28 | **34 MB** |
+| Kafka only | — | — | **5,928** | 0.76 cores | 0.99 | 154 MB |
+| both | **15,870** | 4.3 / 12.5 ms | 3,648 | 1.93 cores | 2.32 | 178 MB |
+
+¹ Not a backlog being drained — there is none in that scenario. It is the
+events the REST writes themselves produce, consumed as fast as they arrive.
+
+The interesting result is the third row: **HTTP throughput is unchanged by the
+Kafka work** (15,804 vs 15,870), while the consumer drops from 5,928 to 3,648
+msg/s. The contention is one-directional — the listener yields to HTTP, not
+the other way round. Sizing follows from that: HTTP capacity per replica is
+predictable, and Kafka consumption is what needs headroom or more partitions.
+
+Note the memory: 34 MB serving 15,804 req/s. The 178 MB in the combined row is
+almost entirely Kafka fetch buffers for the standing backlog.
+
+The script refuses to run on a busy machine, and that guard is not decorative:
+one run reported 980 req/s where the same commit did 17,700 minutes earlier,
+because unrelated processes were competing for the same 12 cores. The first
+scenario of any session also reads low — discard it, or run twice.
+
 **Start with `make floor`.** It drives the rest-api example's in-memory handler
 with no backing service in the path, and answers "is the framework the limit?"
 before any other number is worth reading:
