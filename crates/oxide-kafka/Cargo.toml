@@ -24,7 +24,22 @@ thiserror.workspace = true
 futures.workspace = true
 inventory.workspace = true
 
+[features]
+# On by default: without these, librdkafka is compiled without the code paths
+# for TLS and SASL, and `security.protocol=SASL_SSL` fails at *runtime* --
+# on the first connection to a secured cluster, in production. A framework
+# that silently cannot reach a secured broker is the worse failure, so the
+# cost is paid by default and opted out of, not into.
+#
+# `cargo build --no-default-features -p oxide-kafka` skips compiling OpenSSL
+# and cyrus-sasl, for a local build that only ever talks to a plaintext
+# broker.
+default = ["security"]
+security = ["rdkafka/ssl", "rdkafka/sasl"]
+
 [dev-dependencies]
+# Generates TLS material in-process; a committed certificate expires.
+rcgen = "0.14"
 oxide-test = { workspace = true, features = ["containers"] }
 reqwest.workspace = true
 tempfile.workspace = true

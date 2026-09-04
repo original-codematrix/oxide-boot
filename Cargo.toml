@@ -59,6 +59,19 @@ oxide-client = { path = "crates/oxide-client", version = "0.1.0" }
 oxide-client-macros = { path = "crates/oxide-client-macros", version = "0.1.0" }
 oxide-test = { path = "crates/oxide-test", version = "0.1.0" }
 oxide-test-macros = { path = "crates/oxide-test-macros", version = "0.1.0" }
+# `ssl` and `sasl` are not optional extras here: without them librdkafka is
+# compiled without the code paths for TLS and SASL, and
+# `security.protocol=SASL_SSL` fails at *runtime* with "built without SASL
+# support" -- on the first connection to a secured cluster, in production.
+# The passthrough in `oxide.kafka.properties` is useless without them.
+#
+# System OpenSSL/cyrus-sasl rather than `ssl-vendored`: the runtime image
+# already ships libssl3 and libsasl2-2, and vendoring would compile OpenSSL
+# on every clean build. `gssapi` (Kerberos) is left off -- it needs libkrb5
+# at build and run time, and SCRAM covers what a managed Kafka offers.
+# TLS and SASL are added by `oxide-kafka`'s own `security` feature rather
+# than here, so a build that does not need them does not compile OpenSSL and
+# cyrus-sasl. See that crate's `[features]`.
 rdkafka = { version = "0.39", features = ["cmake-build", "tokio"] }
 regex = "1"
 testcontainers = "0.28"
