@@ -7,25 +7,25 @@
 //! first failure lands in a series nobody was watching.
 
 use oxide_boot::prelude::*;
-use oxide_observability::{MetricRegistration, RequestField, record_request_field};
+use oxide_observability::{RequestField, record_request_field};
 use oxide_web::ManagementServer;
 use std::collections::HashMap;
 
-inventory::submit! {
-    MetricRegistration::counter("registry_probe_failures_total")
-        .describe("Failures seen by the registry integration test")
-}
+// No `inventory::submit!` anywhere: the registration mechanism is an
+// implementation detail, hidden the same way `#[component]` hides it.
+oxide_observability::declare_counter!(
+    "registry_probe_failures_total",
+    "Failures seen by the registry integration test"
+);
 
-inventory::submit! {
-    MetricRegistration::gauge("registry_probe_queue_depth")
-        .describe("Queue depth reported by the registry integration test")
-}
+oxide_observability::declare_gauge!(
+    "registry_probe_queue_depth",
+    "Queue depth reported by the registry integration test"
+);
 
 static LABEL_SETS: &[&[(&str, &str)]] = &[&[("outcome", "ok")], &[("outcome", "rejected")]];
 
-inventory::submit! {
-    MetricRegistration::counter("registry_probe_outcomes_total").with_labels(LABEL_SETS)
-}
+oxide_observability::declare_counter!("registry_probe_outcomes_total", labels = LABEL_SETS);
 
 async fn scrape() -> (oxide_boot::Application, String) {
     let dir = tempfile::tempdir().expect("tempdir");

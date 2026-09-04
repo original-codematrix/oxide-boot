@@ -193,17 +193,26 @@ pub struct CacheSpec {
     pub max_entries: usize,
 }
 
+/// Without a bound a cache is a memory leak with extra steps.
+const DEFAULT_MAX_ENTRIES: usize = 10_000;
+
 fn default_max_entries() -> usize {
-    10_000
+    DEFAULT_MAX_ENTRIES
 }
 
 impl Default for CacheSpec {
     fn default() -> Self {
-        Self { backend: None, ttl_seconds: None, max_entries: default_max_entries() }
+        Self::new()
     }
 }
 
 impl CacheSpec {
+    /// The same values as [`Default`], in a form usable from a `const`
+    /// context -- which is what `inventory::submit!` requires.
+    pub const fn new() -> Self {
+        Self { backend: None, ttl_seconds: None, max_entries: DEFAULT_MAX_ENTRIES }
+    }
+
     pub fn ttl(&self) -> Option<Duration> {
         self.ttl_seconds.map(Duration::from_secs)
     }
@@ -233,6 +242,87 @@ impl Default for CacheProps {
     fn default() -> Self {
         Self { default_backend: default_backend(), caches: HashMap::new() }
     }
+}
+
+/// Declares a cache in code, where the name is already written.
+///
+/// The name in `#[cacheable(cache = "notes")]` is the declaration; repeating
+/// it in `application.yml` just to give it a TTL is duplication, and a
+/// deployment that forgets the YAML gets silent defaults instead of the ones
+/// the code intended. So the defaults live here, next to the code that uses
+/// the cache, and configuration only *overrides* them.
+///
+/// Written with the [`declare_cache!`] macro rather than by hand:
+///
+/// ```ignore
+/// oxide_cache::declare_cache!("notes", backend = Redis, ttl_seconds = 30);
+/// ```
+///
+/// Precedence is the same as everywhere else in the framework: an entry in
+/// `oxide.cache.caches.<name>` wins over the declaration, and an environment
+/// variable wins over that.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct CacheDeclaration {
+    pub name: &'static str,
+    pub spec: CacheSpec,
+}
+
+impl CacheDeclaration {
+    // `const fn` throughout: `inventory::submit!` places the value in a
+    // static, which only accepts const expressions.
+    pub const fn new(name: &'static str) -> Self {
+        Self { name, spec: CacheSpec::new() }
+    }
+
+    pub const fn backend(mut self, backend: Backend) -> Self {
+        self.spec.backend = Some(backend);
+        self
+    }
+
+    pub const fn ttl_seconds(mut self, seconds: u64) -> Self {
+        self.spec.ttl_seconds = Some(seconds);
+        self
+    }
+
+    pub const fn max_entries(mut self, entries: usize) -> Self {
+        self.spec.max_entries = entries;
+        self
+    }
+}
+
+inventory::collect!(CacheDeclaration);
+
+/// Declares a cache without writing `inventory::submit!`.
+///
+/// The registration mechanism is an implementation detail -- `#[component]`
+/// and `#[controller]` hide it, and so does this.
+///
+/// ```ignore
+/// use oxide_cache::Backend;
+///
+/// oxide_cache::declare_cache!("images");
+/// oxide_cache::declare_cache!("notes", backend = Backend::Redis, ttl_seconds = 30);
+/// oxide_cache::declare_cache!("sessions", ttl_seconds = 1800, max_entries = 50_000);
+/// ```
+///
+/// The backend is written as the enum path rather than a bare `Redis`. A
+/// shorthand was tried and removed: it needed a second macro to tell an
+/// identifier from a number, and a mistyped variant then failed inside that
+/// expansion instead of at the call site.
+#[macro_export]
+macro_rules! declare_cache {
+    ($name:expr $(, $key:ident = $value:expr )* $(,)?) => {
+        $crate::__private::inventory::submit! {
+            $crate::CacheDeclaration::new($name) $( .$key($value) )*
+        }
+    };
+}
+
+/// Re-exports for the macros above. Not public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use inventory;
 }
 
 /// Builds a cache for a name and spec. Registered via `inventory` so
@@ -333,8 +423,30 @@ inventory::submit! {
         let ctx = ctx.clone();
         Box::pin(async move {
             let _ = manager.ctx.set(ctx);
+            // Code declarations first, then configuration on top: the code
+            // says which caches exist and how they should behave, and a
+            // deployment adjusts without having to restate the rest.
+            let mut specs: HashMap<String, CacheSpec> = HashMap::new();
+            for decl in inventory::iter::<CacheDeclaration> {
+                specs.insert(decl.name.to_string(), decl.spec.clone());
+            }
+            for (name, configured) in &manager.props.caches {
+                let entry = specs.entry(name.clone()).or_default();
+                // Field by field, so configuring only `ttl-seconds` does not
+                // silently reset the declared backend to the default.
+                if configured.backend.is_some() {
+                    entry.backend = configured.backend;
+                }
+                if configured.ttl_seconds.is_some() {
+                    entry.ttl_seconds = configured.ttl_seconds;
+                }
+                if configured.max_entries != CacheSpec::default().max_entries {
+                    entry.max_entries = configured.max_entries;
+                }
+            }
+
             let mut built: HashMap<String, Arc<dyn DynCache>> = HashMap::new();
-            for (name, spec) in &manager.props.caches {
+            for (name, spec) in &specs {
                 match manager.build(name, spec) {
                     Some(cache) => {
                         built.insert(name.clone(), cache);

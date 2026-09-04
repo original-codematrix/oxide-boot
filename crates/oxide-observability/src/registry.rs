@@ -32,14 +32,12 @@ pub enum MetricKind {
 /// Declares a metric that should exist from boot, with an optional
 /// description and a fixed set of label values.
 ///
-/// Registered via `inventory`, so a starter or an application declares its
-/// metrics next to the code that emits them:
+/// Declared with [`declare_counter!`] / [`declare_gauge!`], next to the code
+/// that emits the metric:
 ///
 /// ```ignore
-/// inventory::submit! {
-///     MetricRegistration::counter("orders_failed_total")
-///         .describe("Orders rejected during checkout")
-/// }
+/// oxide_observability::declare_counter!("orders_failed_total", "Orders rejected during checkout");
+/// oxide_observability::declare_gauge!("queue_depth");
 /// ```
 ///
 /// Labelled metrics need every label *value* named up front, because a
@@ -47,9 +45,8 @@ pub enum MetricKind {
 /// combinations you list can be rendered as zero:
 ///
 /// ```ignore
-/// inventory::submit! {
-///     MetricRegistration::counter("orders_total").with_labels(&[&[("status", "ok")], &[("status", "failed")]])
-/// }
+/// static OUTCOMES: &[&[(&str, &str)]] = &[&[("status", "ok")], &[("status", "failed")]];
+/// oxide_observability::declare_counter!("orders_total", labels = OUTCOMES);
 /// ```
 #[derive(Debug)]
 #[non_exhaustive]
@@ -193,6 +190,55 @@ inventory::submit! {
         })
     })
     .build()
+}
+
+/// Declares a counter that renders as `0` from the first scrape.
+///
+/// Wraps the registration mechanism so nobody has to write
+/// `inventory::submit!` -- the same way `#[component]` hides it.
+///
+/// ```ignore
+/// oxide_observability::declare_counter!("orders_failed_total");
+/// oxide_observability::declare_counter!("orders_failed_total", "Orders rejected at checkout");
+/// oxide_observability::declare_counter!("orders_total", labels = OUTCOMES);
+/// oxide_observability::declare_counter!("orders_total", "All orders", labels = OUTCOMES);
+/// ```
+#[macro_export]
+macro_rules! declare_counter {
+    ($name:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::counter($name) }
+    };
+    ($name:expr, labels = $sets:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::counter($name).with_labels($sets) }
+    };
+    ($name:expr, $description:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::counter($name).describe($description) }
+    };
+    ($name:expr, $description:expr, labels = $sets:expr) => {
+        $crate::__private::inventory::submit! {
+            $crate::MetricRegistration::counter($name).describe($description).with_labels($sets)
+        }
+    };
+}
+
+/// Declares a gauge that renders as `0` from the first scrape. Same forms as
+/// [`declare_counter!`].
+#[macro_export]
+macro_rules! declare_gauge {
+    ($name:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::gauge($name) }
+    };
+    ($name:expr, labels = $sets:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::gauge($name).with_labels($sets) }
+    };
+    ($name:expr, $description:expr) => {
+        $crate::__private::inventory::submit! { $crate::MetricRegistration::gauge($name).describe($description) }
+    };
+    ($name:expr, $description:expr, labels = $sets:expr) => {
+        $crate::__private::inventory::submit! {
+            $crate::MetricRegistration::gauge($name).describe($description).with_labels($sets)
+        }
+    };
 }
 
 #[cfg(test)]
