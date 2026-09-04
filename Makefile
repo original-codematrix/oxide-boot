@@ -29,7 +29,7 @@ audit:
 ci: check audit
 
 msrv:
-	cargo +1.88 check --workspace --all-targets
+	cargo +1.95 check --workspace --all-targets
 
 # `target/` is the only thing in this repo that grows without bound. A full
 # test build plus release binaries sits around 15 GB with the size-bounded

@@ -58,7 +58,7 @@ from YAML — see "Environment overrides" below.
 
 ## Development
 
-Toolchain: Rust **1.88+** (`rust-version` in `Cargo.toml`); `rust-toolchain.toml`
+Toolchain: Rust **1.95+** (`rust-version` in `Cargo.toml`); `rust-toolchain.toml`
 pins an explicit stable version (with `rustfmt` and `clippy`) so local builds and
 CI use the same compiler. `Cargo.lock` is tracked so builds and security scans
 are reproducible.
@@ -76,7 +76,7 @@ running Docker daemon; they pin host ports `9092` and `27017`.
 make ci       # everything below
 make check    # fmt --check, clippy -D warnings, cargo test --workspace
 make audit    # cargo audit + cargo deny check (advisories, licenses, sources)
-make msrv     # cargo +1.88 check --workspace --all-targets, against the declared MSRV
+make msrv     # cargo +1.95 check --workspace --all-targets, against the declared MSRV
 make loadtest # release build of the rest-api example under k6 (see below)
 make floor          # the framework's HTTP ceiling, no backends (read the rest against this)
 make benchmark      # all four integrations, phased (see below)
@@ -84,10 +84,10 @@ make stack / stack-down
 make clean    # cargo clean -- `target/` is the only thing here that grows without bound
 ```
 
-`make msrv` needs the 1.88 toolchain installed once:
+`make msrv` needs the 1.95 toolchain installed once:
 
 ```sh
-rustup toolchain install 1.88
+rustup toolchain install 1.95
 ```
 
 Policy lives in `deny.toml`: RUSTSEC advisories fail the build, licenses must be
