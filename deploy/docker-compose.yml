@@ -22,6 +22,10 @@ services:
       - start
       - --mode=dev-container
       - --overprovisioned
+      # 2 cores is enough, and measured: raising this to 6 with 4G moved the
+      # consumer's throughput under concurrent production by 15 msg/s out of
+      # ~3,700 -- nothing. The broker is not what caps it, so the cores stay
+      # with the service and the load generator, which do need them.
       - --smp=2
       - --memory=2G
       # Two listeners, which Redpanda needs whenever clients live on both

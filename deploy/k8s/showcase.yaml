@@ -1,0 +1,194 @@
+# Kubernetes manifest for the `showcase` example, with requests and limits
+# taken from measurement rather than guessed. Reference only -- `kubectl apply`
+# nothing from here without knowing which cluster you are pointed at.
+#
+# ---------------------------------------------------------------------------
+# Where these numbers come from
+# ---------------------------------------------------------------------------
+#
+# Measured over two hours of load runs (100-200 VUs, ~20,000 req/s HTTP plus a
+# Kafka backlog and 2,000 msg/s of concurrent production), read from the
+# service's own /actuator/prometheus:
+#
+#   RSS       102 MB idle, 172 MB median, 223 MB peak
+#   CPU       2.13 cores at p95, 2.20 cores peak
+#   Threads   26
+#   Virtual   1,698 MB   <- deliberately NOT used for sizing, see below
+#
+# **Ignore virtual memory.** It is reserved address space, not memory. It
+# includes every mapped shared library, a reservation per thread stack (26
+# threads at 8 MB each is ~208 MB of the total, essentially none of it
+# touched), and whatever the allocator asked the kernel for without writing
+# to. Kubernetes never looks at it: the kubelet evicts and the OOM killer
+# fires on `container_memory_working_set_bytes`, which is resident pages plus
+# active page cache. A process can hold gigabytes virtually and 50 MB real.
+#
+# The one thing virtual memory is good for: if it climbs steadily while RSS
+# stays flat, something is leaking address space (mmap without munmap). Watch
+# the trend, never the absolute value.
+#
+# ---------------------------------------------------------------------------
+# The requests/limits reasoning
+# ---------------------------------------------------------------------------
+#
+# memory request 256Mi -- above the 223 MB peak, so the scheduler reserves
+#   what the pod actually uses at full tilt rather than what it uses idling.
+# memory limit 512Mi -- request plus roughly 2x headroom. Memory limits are
+#   not throttled, they are fatal: exceed one and the container is OOM-killed
+#   mid-request. The headroom covers allocator behaviour under a traffic spike
+#   and a heap that has not been returned to the OS yet.
+# memory request == limit is also defensible here (Guaranteed QoS class, first
+#   to survive node pressure); 512Mi limit with a 256Mi request is Burstable,
+#   which packs better. Pick per cluster.
+#
+# cpu request 2 -- the p95 was 2.13 cores under full load. A request below
+#   real usage means the scheduler overcommits the node and the pod is
+#   throttled exactly when it is busiest.
+# cpu limit 3 -- headroom for the peak, but note that CPU limits throttle
+#   rather than kill, and throttling a tokio runtime shows up as latency, not
+#   errors. Many teams deliberately set no CPU limit at all and rely on the
+#   request; if p99 latency matters more than noisy-neighbour isolation, that
+#   is the better trade.
+#
+# These are for ONE replica at ~20,000 req/s. The Kafka consumer does not
+# scale with replicas beyond the partition count: with 6 partitions, a 7th
+# replica gets no partitions and consumes nothing.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: showcase
+  labels:
+    app: showcase
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: showcase
+  template:
+    metadata:
+      labels:
+        app: showcase
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      # A rolling update must not cut in-flight requests: the service drains
+      # for `oxide.server.shutdown-grace-seconds` on SIGTERM, so give the pod
+      # more than that before SIGKILL.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: showcase
+          image: oxide-loadtest-showcase:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          env:
+            - name: OXIDE_KAFKA_BOOTSTRAP_SERVERS
+              value: redpanda:9092
+            - name: OXIDE_MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: showcase-secrets
+                  key: mongo-uri
+            - name: OXIDE_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: showcase-secrets
+                  key: redis-url
+            - name: OXIDE_LOGGING_LEVEL_ROOT
+              value: info
+            # The management server binds 0.0.0.0 so the kubelet can reach it
+            # on the pod IP; `exposure` is what keeps /actuator/prometheus from
+            # being public, not the bind address.
+            - name: OXIDE_MANAGEMENT_ENDPOINTS_EXPOSURE
+              value: health,info,prometheus
+            - name: OXIDE_MANAGEMENT_ENDPOINTS_SHOW_DETAILS
+              value: never
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: "2"
+            limits:
+              memory: 512Mi
+              cpu: "3"
+          # Liveness must not depend on a backing service: if Mongo is down,
+          # restarting this pod fixes nothing and turns an outage into a
+          # crashloop. /actuator/health/liveness answers from the process
+          # alone (Spring Boot uses the same two paths under /actuator/health).
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            failureThreshold: 3
+          # Readiness here means "this process has started and is serving",
+          # NOT "its dependencies are healthy". Verified: with MongoDB stopped,
+          # /actuator/health returns 503 but /actuator/health/readiness stays
+          # 200. That is a defensible default rather than a bug -- pointing
+          # readiness at /actuator/health would pull *every* replica out of the
+          # load balancer the moment a shared dependency blips, turning a
+          # degraded database into a total outage. If you want the opposite
+          # (drain traffic on dependency failure) point this at
+          # /actuator/health and accept that trade knowingly.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 2
+          # Boot includes connecting to Mongo, Redis and Kafka. A startup probe
+          # keeps a slow start from tripping the liveness probe.
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: showcase
+spec:
+  selector:
+    app: showcase
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Autoscale on CPU, not on memory: this service's memory is flat under load
+# (102 MB idle to 223 MB at 20k req/s) while CPU tracks throughput almost
+# linearly, so CPU is the signal that actually correlates with demand.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: showcase
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: showcase
+  minReplicas: 2
+  # Beyond the topic's partition count the extra replicas serve HTTP but
+  # consume no Kafka, so raise the partitions before raising this.
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

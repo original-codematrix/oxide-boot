@@ -735,6 +735,43 @@ Also missing from the DI container itself: `@Import`-style explicit
 configuration classes, injection by trait (only concrete types resolve),
 `@MockBean`-style replacement in tests, and pagination in derived queries.
 
+### Sizing this for Kubernetes
+
+`deploy/k8s/showcase.yaml` is a reference manifest whose requests and limits
+come from measurement, not from guessing. Measured over two hours of load runs
+(~20,000 req/s plus a Kafka backlog and 2,000 msg/s of concurrent production),
+read from the service's own `/actuator/prometheus`:
+
+| | |
+|---|---|
+| RSS | 102 MB idle, 172 MB median, **223 MB peak** |
+| CPU | **2.13 cores p95**, 2.20 peak |
+| Threads | 26 |
+| Virtual memory | 1,698 MB — *not* a sizing input, see below |
+
+**Virtual memory is not memory.** It is reserved address space: mapped shared
+libraries, an 8 MB stack reservation per thread (26 threads ≈ 208 MB of the
+total, essentially untouched), and whatever the allocator asked the kernel for
+without writing to. Kubernetes never looks at it — the kubelet evicts and the
+OOM killer fires on `container_memory_working_set_bytes`, which is resident
+pages plus active page cache. Size against RSS. The one use for the virtual
+figure is its *trend*: rising while RSS stays flat means address space is
+leaking.
+
+That gives `requests: 256Mi / 2 cpu`, `limits: 512Mi / 3 cpu`. Memory limits
+kill rather than throttle, so the headroom is deliberate; CPU limits throttle,
+which on a tokio runtime surfaces as latency rather than errors, and skipping
+the CPU limit entirely is a reasonable choice if p99 matters more than
+noisy-neighbour isolation.
+
+Two things the manifest documents because they are easy to get wrong:
+liveness must not depend on a backing service (restarting a pod does not fix
+someone else's database), and readiness here means "started and serving", not
+"dependencies healthy" — verified by stopping MongoDB, after which
+`/actuator/health` returns 503 while `/actuator/health/readiness` stays 200.
+Pointing readiness at `/actuator/health` would drain every replica at once on
+a shared-dependency blip.
+
 ### A Redpanda crash worth knowing about
 
 Recreating the `notes-events` topic while the `showcase` consumer group still
