@@ -49,16 +49,91 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-/// When a task runs.
+/// When a task runs, as written in the attribute.
+///
+/// Each variant holds the *unresolved* text, because a schedule that can
+/// only be changed by recompiling is not much of a schedule. Every one of
+/// them accepts a `${key:default}` placeholder, resolved against the
+/// application configuration at boot:
+///
+/// ```ignore
+/// #[scheduled(cron = "${reports.nightly-cron:0 0 3 * * *}")]
+/// #[scheduled(fixed_delay_seconds = "${poller.delay:30}")]
+/// ```
+///
+/// A literal is still just a literal, so `cron = "0 0 3 * * *"` and
+/// `fixed_delay_seconds = 30` keep working unchanged.
 #[derive(Debug, Clone)]
 pub enum Trigger {
     /// A cron expression with seconds: `"0 0 3 * * *"` is 03:00 daily.
     Cron(String),
-    /// Wait this long after the previous run *finished*.
+    /// Seconds to wait after the previous run *finished*.
+    FixedDelay(String),
+    /// Seconds between run *starts*. Skips an occurrence rather than
+    /// overlapping when a run overruns.
+    FixedRate(String),
+}
+
+/// A trigger with placeholders resolved and intervals parsed.
+#[derive(Debug, Clone)]
+pub enum ResolvedTrigger {
+    Cron(String),
     FixedDelay(Duration),
-    /// Run every interval measured from the previous run's *start*. Skips an
-    /// occurrence rather than overlapping when a run overruns.
     FixedRate(Duration),
+}
+
+/// Replaces a `${key}` or `${key:default}` spec with its configured value.
+///
+/// Anything that is not exactly one placeholder is returned unchanged, so a
+/// literal cron expression -- which contains no `$` -- passes straight
+/// through.
+///
+/// A placeholder with no configured value and no default is an error rather
+/// than a silent fallback: a schedule that quietly did not take the value an
+/// operator set is worse than one that refuses to start.
+pub fn resolve_spec(spec: &str, config: &oxide_core::AppConfig) -> Result<String, String> {
+    let trimmed = spec.trim();
+    let Some(inner) = trimmed.strip_prefix("${").and_then(|r| r.strip_suffix('}')) else {
+        return Ok(spec.to_string());
+    };
+    let (key, default) = match inner.split_once(':') {
+        Some((key, default)) => (key, Some(default)),
+        None => (inner, None),
+    };
+    match config.get_opt::<String>(key.trim()) {
+        Ok(Some(value)) => Ok(value),
+        // A non-string scalar (a number, for an interval) still binds; the
+        // config tree keeps YAML types, so ask again untyped.
+        Ok(None) | Err(_) => match config.get_opt::<serde_yaml_ng::Value>(key.trim()) {
+            Ok(Some(serde_yaml_ng::Value::Number(n))) => Ok(n.to_string()),
+            Ok(Some(serde_yaml_ng::Value::String(v))) => Ok(v),
+            _ => default
+                .map(str::to_string)
+                .ok_or_else(|| format!("no value configured for '{key}' and the placeholder '{spec}' has no default")),
+        },
+    }
+}
+
+/// Resolves a trigger's placeholders and parses its interval.
+pub fn resolve_trigger(trigger: &Trigger, config: &oxide_core::AppConfig) -> Result<ResolvedTrigger, String> {
+    let seconds = |spec: &str| -> Result<Duration, String> {
+        let resolved = resolve_spec(spec, config)?;
+        let value: u64 = resolved
+            .trim()
+            .parse()
+            .map_err(|_| format!("'{resolved}' is not a whole number of seconds (from '{spec}')"))?;
+        if value == 0 {
+            // A zero interval is a busy loop that would peg a core; almost
+            // certainly a placeholder that resolved to the wrong thing.
+            return Err(format!("an interval of 0 seconds would spin (from '{spec}')"));
+        }
+        Ok(Duration::from_secs(value))
+    };
+    Ok(match trigger {
+        Trigger::Cron(spec) => ResolvedTrigger::Cron(resolve_spec(spec, config)?),
+        Trigger::FixedDelay(spec) => ResolvedTrigger::FixedDelay(seconds(spec)?),
+        Trigger::FixedRate(spec) => ResolvedTrigger::FixedRate(seconds(spec)?),
+    })
 }
 
 /// One registered scheduled method.
@@ -224,6 +299,8 @@ inventory::submit! {
     .post_construct(|ctx: &Context| {
         let scheduler = ctx.get::<Scheduler>().expect("Scheduler exists");
         let props = (*ctx.get::<SchedulerProps>().expect("SchedulerProps exists")).clone();
+        // The resolved configuration, for `${...}` placeholders in triggers.
+        let config = (*ctx.get::<oxide_core::AppConfig>().expect("AppConfig is always in the context")).clone();
         let ctx = ctx.clone();
         Box::pin(async move {
             if !props.enabled {
@@ -233,18 +310,27 @@ inventory::submit! {
 
             let mut handles = Vec::new();
             for task in inventory::iter::<ScheduledTask> {
-                // A cron expression is validated here rather than on first
-                // fire: a typo should fail the boot, not go unnoticed until
-                // 03:00.
-                if let Trigger::Cron(expression) = (task.trigger)()
-                    && let Err(e) = next_cron_delay(&expression, chrono::Local::now())
-                {
-                    return Err(oxide_core::ContextError::Construct {
-                        type_name: "Scheduler",
-                        message: format!("task '{}': {e}", task.name),
+                // Placeholders are resolved and cron expressions validated
+                // here rather than on first fire: a typo, or a
+                // `${schedule.cron}` nobody configured, should fail the
+                // deployment instead of going unnoticed until 03:00.
+                let resolved = resolve_trigger(&(task.trigger)(), &config).and_then(|t| {
+                    if let ResolvedTrigger::Cron(expression) = &t {
+                        next_cron_delay(expression, chrono::Local::now())?;
                     }
-                    .into());
-                }
+                    Ok(t)
+                });
+                let resolved = match resolved {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return Err(oxide_core::ContextError::Construct {
+                            type_name: "Scheduler",
+                            message: format!("task '{}': {e}", task.name),
+                        }
+                        .into());
+                    }
+                };
+                tracing::debug!(task = task.name, trigger = ?resolved, "scheduling");
 
                 let stats = scheduler
                     .stats(task.name)
@@ -265,9 +351,9 @@ inventory::submit! {
                             return;
                         }
 
-                        let sleep = match (task.trigger)() {
-                            Trigger::Cron(expression) => {
-                                let wait = match next_cron_delay(&expression, chrono::Local::now()) {
+                        let sleep = match &resolved {
+                            ResolvedTrigger::Cron(expression) => {
+                                let wait = match next_cron_delay(expression, chrono::Local::now()) {
                                     Ok(d) => d,
                                     Err(e) => {
                                         // Validated at boot, so this is a
@@ -279,9 +365,11 @@ inventory::submit! {
                                 };
                                 tokio::time::sleep_until(tokio::time::Instant::now() + wait)
                             }
-                            Trigger::FixedDelay(d) => tokio::time::sleep_until(tokio::time::Instant::now() + d),
-                            Trigger::FixedRate(d) => {
-                                next_rate_wake += d;
+                            ResolvedTrigger::FixedDelay(d) => {
+                                tokio::time::sleep_until(tokio::time::Instant::now() + *d)
+                            }
+                            ResolvedTrigger::FixedRate(d) => {
+                                next_rate_wake += *d;
                                 let now = tokio::time::Instant::now();
                                 // A run that overran several intervals must
                                 // not then fire that many times in a row.
@@ -307,9 +395,9 @@ inventory::submit! {
                         // what makes an overlapping occurrence possible at
                         // all -- and `run_once`'s guard is what turns it
                         // into a skip rather than a second concurrent run.
-                        match (task.trigger)() {
-                            Trigger::FixedDelay(_) => run_once(task, &ctx, &stats).await,
-                            Trigger::FixedRate(_) | Trigger::Cron(_) => {
+                        match &resolved {
+                            ResolvedTrigger::FixedDelay(_) => run_once(task, &ctx, &stats).await,
+                            ResolvedTrigger::FixedRate(_) | ResolvedTrigger::Cron(_) => {
                                 let ctx = ctx.clone();
                                 let stats = Arc::clone(&stats);
                                 tokio::spawn(async move { run_once(task, &ctx, &stats).await });

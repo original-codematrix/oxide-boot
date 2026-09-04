@@ -26,10 +26,26 @@ pub fn tasks_of(_args: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Every trigger is carried as text, because each may be a `${key:default}`
+/// placeholder resolved at boot. An integer literal is accepted for the
+/// interval forms and simply stringified.
 enum Trigger {
     Cron(String),
-    FixedDelay(u64),
-    FixedRate(u64),
+    FixedDelay(String),
+    FixedRate(String),
+}
+
+/// Accepts `30` or `"${poller.delay:30}"` for an interval.
+fn interval_spec(meta: &syn::meta::ParseNestedMeta) -> syn::Result<String> {
+    let value = meta.value()?;
+    let lookahead = value.lookahead1();
+    if lookahead.peek(syn::LitInt) {
+        Ok(value.parse::<syn::LitInt>()?.base10_digits().to_string())
+    } else if lookahead.peek(syn::LitStr) {
+        Ok(value.parse::<syn::LitStr>()?.value())
+    } else {
+        Err(lookahead.error())
+    }
 }
 
 fn parse_trigger(attr: &syn::Attribute) -> syn::Result<Trigger> {
@@ -47,11 +63,11 @@ fn parse_trigger(attr: &syn::Attribute) -> syn::Result<Trigger> {
             let lit: syn::LitStr = meta.value()?.parse()?;
             set(&mut found, Trigger::Cron(lit.value()), "cron")
         } else if meta.path.is_ident("fixed_delay_seconds") {
-            let lit: syn::LitInt = meta.value()?.parse()?;
-            set(&mut found, Trigger::FixedDelay(lit.base10_parse()?), "fixed_delay_seconds")
+            let spec = interval_spec(&meta)?;
+            set(&mut found, Trigger::FixedDelay(spec), "fixed_delay_seconds")
         } else if meta.path.is_ident("fixed_rate_seconds") {
-            let lit: syn::LitInt = meta.value()?.parse()?;
-            set(&mut found, Trigger::FixedRate(lit.base10_parse()?), "fixed_rate_seconds")
+            let spec = interval_spec(&meta)?;
+            set(&mut found, Trigger::FixedRate(spec), "fixed_rate_seconds")
         } else {
             Err(meta.error("expected `cron = \"...\"`, `fixed_delay_seconds = N` or `fixed_rate_seconds = N`"))
         }
@@ -92,11 +108,11 @@ fn expand(item: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStrea
             Trigger::Cron(expression) => quote! {
                 ::oxide_scheduler::Trigger::Cron(::std::string::String::from(#expression))
             },
-            Trigger::FixedDelay(seconds) => quote! {
-                ::oxide_scheduler::Trigger::FixedDelay(::core::time::Duration::from_secs(#seconds))
+            Trigger::FixedDelay(spec) => quote! {
+                ::oxide_scheduler::Trigger::FixedDelay(::std::string::String::from(#spec))
             },
-            Trigger::FixedRate(seconds) => quote! {
-                ::oxide_scheduler::Trigger::FixedRate(::core::time::Duration::from_secs(#seconds))
+            Trigger::FixedRate(spec) => quote! {
+                ::oxide_scheduler::Trigger::FixedRate(::std::string::String::from(#spec))
             },
         };
 

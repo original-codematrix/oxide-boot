@@ -136,3 +136,60 @@ fn an_invalid_cron_expression_is_reported_with_the_expression() {
     // has to say which expression.
     assert!(err.contains("not a cron"), "the error does not quote the expression: {err}");
 }
+
+// ---------------------------------------------------------------------
+// Schedules from configuration
+// ---------------------------------------------------------------------
+
+static CONFIGURED_RUNS: AtomicUsize = AtomicUsize::new(0);
+
+#[component]
+pub struct ConfiguredJobs {
+    #[default]
+    _marker: bool,
+}
+
+#[scheduled_tasks]
+impl ConfiguredJobs {
+    /// The interval comes from `application.yml`, with a default for the
+    /// case where nobody set one. A schedule that can only be changed by
+    /// recompiling is not much of a schedule.
+    // `oxide.` prefix because this test's helper appends its extra YAML
+    // inside the `oxide:` block. An application's own keys usually sit at
+    // the top level and would be written `${jobs.poll-seconds:3600}`.
+    #[scheduled(fixed_delay_seconds = "${oxide.jobs.poll-seconds:3600}")]
+    async fn configured(&self) -> Result<(), String> {
+        CONFIGURED_RUNS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interval_can_come_from_configuration() {
+    let before = CONFIGURED_RUNS.load(Ordering::SeqCst);
+    // The declared default is an hour; the configuration says one second.
+    let app = boot("  jobs:\n    poll-seconds: 1\n").await;
+    tokio::time::sleep(Duration::from_millis(2400)).await;
+    assert!(
+        CONFIGURED_RUNS.load(Ordering::SeqCst) > before,
+        "the configured interval was ignored and the 3600s default used"
+    );
+    app.stop().await.expect("stop");
+}
+
+#[test]
+fn a_placeholder_falls_back_to_its_default() {
+    let config = oxide_core::AppConfig::from_yaml("oxide: {}\n").expect("config");
+    assert_eq!(oxide_scheduler::resolve_spec("${nope.missing:0 0 3 * * *}", &config).unwrap(), "0 0 3 * * *");
+    // A literal contains no placeholder and passes through untouched.
+    assert_eq!(oxide_scheduler::resolve_spec("0 0 3 * * *", &config).unwrap(), "0 0 3 * * *");
+}
+
+#[test]
+fn a_placeholder_without_a_value_or_a_default_is_an_error() {
+    let config = oxide_core::AppConfig::from_yaml("oxide: {}\n").expect("config");
+    let err = oxide_scheduler::resolve_spec("${nobody.set.this}", &config).unwrap_err();
+    // Quietly falling back would mean a schedule that silently ignored what
+    // an operator configured.
+    assert!(err.contains("nobody.set.this"), "the error does not name the key: {err}");
+}

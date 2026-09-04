@@ -60,6 +60,20 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// Builds a configuration straight from a YAML string, with no files,
+    /// no environment and no profiles.
+    ///
+    /// For testing code that reads configuration without booting an
+    /// application or writing a temporary file. Placeholders are resolved,
+    /// so `${a:b}` behaves as it would in a real load.
+    pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
+        let mut root: Value =
+            serde_yaml_ng::from_str(yaml).map_err(|source| ConfigError::Parse { path: "<inline>".into(), source })?;
+        seed_defaults(&mut root);
+        resolve_placeholders(&mut root)?;
+        Ok(Self { root, profiles: Vec::new() })
+    }
+
     pub fn load(base_dir: &Path, env: &HashMap<String, String>) -> Result<Self, ConfigError> {
         let profiles: Vec<String> = env
             .get("OXIDE_PROFILES_ACTIVE")

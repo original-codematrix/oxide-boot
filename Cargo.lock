@@ -2727,6 +2727,7 @@ dependencies = [
  "oxide-scheduler-macros",
  "oxide-web",
  "serde",
+ "serde_yaml_ng",
  "tempfile",
  "thiserror",
  "tokio",

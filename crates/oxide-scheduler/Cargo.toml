@@ -18,9 +18,11 @@ tracing.workspace = true
 metrics.workspace = true
 inventory.workspace = true
 serde.workspace = true
+serde_yaml_ng.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+oxide-core.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 chrono.workspace = true
