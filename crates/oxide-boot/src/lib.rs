@@ -6,7 +6,9 @@ mod logging;
 pub use app::{AppBuilder, Application, BootError, OxideApplication};
 pub use logging::{LoggingInitializer, logging_directives};
 pub use oxide_core::Inject;
-pub use oxide_macros::{ConfigProperties, component, configuration, main};
+pub mod retry;
+
+pub use oxide_macros::{ConfigProperties, component, configuration, main, retryable};
 
 /// Internal re-exports used by generated macro code. Not part of the
 /// public API; do not use directly.
