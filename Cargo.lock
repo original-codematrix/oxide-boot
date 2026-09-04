@@ -2180,6 +2180,8 @@ dependencies = [
  "oxide-boot",
  "oxide-cache-macros",
  "oxide-core",
+ "oxide-observability",
+ "oxide-web",
  "serde",
  "serde_json",
  "tempfile",

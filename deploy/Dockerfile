@@ -24,7 +24,14 @@ COPY examples examples
 # The workspace lists `tests/smoke` as a member, so cargo refuses to read the
 # manifest without it -- even though nothing here builds it.
 COPY tests tests
-RUN cargo build --release -p showcase --bin showcase --bin seed
+RUN cargo build --release -p showcase --bin showcase --bin seed \
+    # Strip here rather than in the release profile. The workspace keeps
+    # line tables in release so `perf`/`samply` can resolve a flamegraph on
+    # the host -- but on Linux that debug info stays *inside* the binary
+    # (macOS puts it in a separate .dSYM), which made the showcase binary
+    # 130 MB in the image against 23 MB on the host. A container image is
+    # not where anyone profiles, so it ships stripped.
+    && strip /src/target/release/showcase /src/target/release/seed
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
