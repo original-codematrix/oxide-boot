@@ -1,8 +1,11 @@
-# A load test's interesting window is often under a minute, so the scrape
-# interval is short: at the default 15s a 30s run yields two points.
+# 10s, not the 2s this started at. A load test's interesting window is short,
+# so a fast scrape is tempting -- but the dashboard queries at a 15s minimum
+# step, so anything finer is stored and never drawn. At 2s, with the `uri`
+# label plus k6's remote write, the TSDB grew past its 2 GB limit and
+# Prometheus was OOM-killed mid-run twice, taking the dashboard with it.
 global:
-  scrape_interval: 2s
-  evaluation_interval: 2s
+  scrape_interval: 10s
+  evaluation_interval: 10s
 
 scrape_configs:
   - job_name: showcase

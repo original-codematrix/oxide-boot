@@ -8,6 +8,9 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     jsonData:
-      # Matches the scrape interval in prometheus.yml, so Grafana's `$__rate_interval`
-      # resolves to something sane on short load-test windows.
-      timeInterval: 2s
+      # The floor for $__rate_interval and for the step Grafana sends. Set to
+      # 15s rather than the 2s scrape interval: at 2s a 15-minute window
+      # returns hundreds of points per series and the dashboard becomes
+      # sluggish, without showing anything the coarser resolution misses.
+      # Individual panels can still ask for finer via their own min interval.
+      timeInterval: 15s

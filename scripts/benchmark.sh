@@ -223,8 +223,22 @@ sample_containers() {
   local out=$1
   echo "name cpu_pct mem_mb" > "$out"
   while :; do
+    # The unit has to be converted, not stripped: "2GiB" and "2MiB" both
+    # become "2" otherwise, which reported a 2 GB Prometheus as 2 MB.
+    # LC_ALL applies to awk too, not just docker: under a comma-decimal locale
+    # awk's printf writes "2048,0" and the reader parses it as 2048.
     LC_ALL=C docker stats --no-stream --format '{{.Name}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null \
-      | awk '{gsub(/%/,"",$2); gsub(/MiB|GiB/,"",$3); print $1, $2, $3}' >> "$out"
+      | LC_ALL=C awk '{
+            gsub(/%/, "", $2)
+            mem = $3
+            unit = mem
+            gsub(/[0-9.]/, "", unit)
+            gsub(/[^0-9.]/, "", mem)
+            if (unit == "GiB") mem *= 1024
+            else if (unit == "KiB") mem /= 1024
+            else if (unit == "B") mem /= 1048576
+            printf "%s %s %.1f\n", $1, $2, mem
+        }' >> "$out"
     sleep 2
   done
 }
@@ -264,7 +278,7 @@ if [[ "$K6_IN_NETWORK" == "1" ]]; then
     -e VUS="$VUS" -e DURATION="$DURATION" \
     -e K6_PROMETHEUS_RW_SERVER_URL="http://prometheus:9090/api/v1/write" \
     -e K6_PROMETHEUS_RW_TREND_STATS="p(50),p(95),p(99)" \
-    -e K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
+    -e K6_PROMETHEUS_RW_PUSH_INTERVAL="10s" \
     grafana/k6:latest run -o experimental-prometheus-rw \
       --summary-export /out/summary.json \
       /scripts/loadtest-showcase.js "$@" 2>&1 | tee "$OUT/k6.log" || true
@@ -274,7 +288,7 @@ MGMT_URL="http://127.0.0.1:${MGMT_PORT}" \
 VUS="$VUS" DURATION="$DURATION" \
 K6_PROMETHEUS_RW_SERVER_URL="http://localhost:9090/api/v1/write" \
 K6_PROMETHEUS_RW_TREND_STATS="p(50),p(95),p(99)" \
-K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
+K6_PROMETHEUS_RW_PUSH_INTERVAL="10s" \
   k6 run -o experimental-prometheus-rw \
     --summary-export "$OUT/summary.json" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true

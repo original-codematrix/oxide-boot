@@ -1,7 +1,7 @@
 {
   "uid": "oxide-showcase",
   "title": "Oxide Boot \u2014 showcase under load",
-  "description": "The showcase example (web + Mongo + Redis + Kafka) during a k6 run. Service metrics are scraped from /actuator/prometheus; the k6 row arrives via Prometheus remote write and is empty between runs.",
+  "description": "The showcase example (web + Mongo + Redis + Kafka) during a k6 run. Service metrics are scraped from /actuator/prometheus; the k6 row arrives via Prometheus remote write and is empty between runs. Queries use a 15s minimum step: the scrape interval is 2s, and rendering every raw point made the dashboard sluggish without showing anything more.",
   "tags": [
     "oxide-boot",
     "loadtest"
@@ -10,19 +10,18 @@
   "editable": true,
   "schemaVersion": 39,
   "version": 1,
-  "refresh": "5s",
+  "refresh": "15s",
   "time": {
     "from": "now-15m",
     "to": "now"
   },
   "timepicker": {
     "refresh_intervals": [
-      "1s",
-      "2s",
-      "5s",
-      "10s",
+      "15s",
       "30s",
-      "1m"
+      "1m",
+      "5m",
+      "15m"
     ]
   },
   "panels": [
@@ -95,7 +94,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 2,
@@ -175,7 +176,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 3,
@@ -246,7 +249,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 101,
@@ -317,7 +322,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 5,
@@ -375,7 +382,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 102,
@@ -448,7 +457,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 7,
@@ -506,7 +517,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 8,
@@ -586,7 +599,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 9,
@@ -644,7 +659,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 103,
@@ -708,7 +725,9 @@
         "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 12,
@@ -777,7 +796,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 13,
@@ -857,7 +878,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 104,
@@ -924,7 +947,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 21,
@@ -989,7 +1014,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 22,
@@ -1043,7 +1070,9 @@
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 23,
@@ -1094,7 +1123,9 @@
         "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 24,
@@ -1145,7 +1176,9 @@
         "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 25,
@@ -1196,7 +1229,9 @@
         "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     },
     {
       "id": 26,
@@ -1247,7 +1282,9 @@
         "graphMode": "area",
         "textMode": "auto",
         "justifyMode": "auto"
-      }
+      },
+      "interval": "15s",
+      "maxDataPoints": 500
     }
   ]
 }
