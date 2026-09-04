@@ -17,6 +17,31 @@ pub enum ContextError {
     NotFound { type_name: &'static str },
     #[error("failed to construct component '{type_name}': {message}")]
     Construct { type_name: &'static str, message: String },
+    #[error(
+        "two instances of '{type_name}' are both marked primary ('{first}' and '{second}') — an unqualified \
+         injection could not choose between them"
+    )]
+    DuplicatePrimary { type_name: &'static str, first: &'static str, second: &'static str },
+    #[error("two instances of '{type_name}' are both named '{name}' — a qualified injection would be ambiguous")]
+    DuplicateName { type_name: &'static str, name: &'static str },
+}
+
+/// Chooses among the instances registered for one type.
+///
+/// With a name, it is an exact match. Without one: the sole instance if
+/// there is exactly one, otherwise the instance marked primary. Several
+/// instances and no primary yields `None` rather than an arbitrary choice --
+/// silently picking one is how a service ends up talking to the replica it
+/// never meant to.
+fn pick<'a>(entries: &'a [Instance], name: Option<&str>) -> Option<&'a Arc<dyn Any + Send + Sync>> {
+    match name {
+        Some(wanted) => entries.iter().find(|e| e.name == Some(wanted)).map(|e| &e.value),
+        None => match entries {
+            [] => None,
+            [only] => Some(&only.value),
+            many => many.iter().find(|e| e.primary).map(|e| &e.value),
+        },
+    }
 }
 
 /// Shared handle to a singleton component. Cheap to clone; derefs to `T`.
@@ -185,9 +210,28 @@ impl ComponentDescriptorBuilder {
     }
 }
 
+/// One registered instance of a type.
+///
+/// A type can have several: `#[bean(name = "replica")]` next to a default
+/// one, for example. `name` is `None` for the ordinary single-instance case,
+/// which is what `#[component]` produces.
+struct Instance {
+    /// For diagnostics only; the map key is the authority on identity.
+    type_name: &'static str,
+    name: Option<&'static str>,
+    /// Chosen by an unqualified lookup when several instances exist. At most
+    /// one per type; a second is rejected at boot.
+    primary: bool,
+    value: Arc<dyn Any + Send + Sync>,
+}
+
 #[derive(Default)]
 pub struct ContextBuilder {
-    map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    /// Several instances per type, in registration order. A `Vec` rather
+    /// than a map keyed by name because the common case is exactly one
+    /// entry, and a two-element scan beats hashing a name that is usually
+    /// absent.
+    instances: HashMap<TypeId, Vec<Instance>>,
 }
 
 impl ContextBuilder {
@@ -209,19 +253,47 @@ impl ContextBuilder {
     /// thread a `Result` through a call that, given that upstream guarantee,
     /// cannot observe a real collision.
     pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) {
-        self.map.insert(TypeId::of::<T>(), Arc::new(value));
+        self.insert_qualified(None, false, value);
+    }
+
+    /// Inserts a named and/or primary instance.
+    ///
+    /// `name` qualifies the instance for `get_named`; `primary` makes it the
+    /// answer to an unqualified `get` when several instances of `T` exist.
+    /// Both are what `#[bean(name = "...", primary)]` produces.
+    pub fn insert_qualified<T: Send + Sync + 'static>(&mut self, name: Option<&'static str>, primary: bool, value: T) {
+        self.instances.entry(TypeId::of::<T>()).or_default().push(Instance {
+            type_name: std::any::type_name::<T>(),
+            name,
+            primary,
+            value: Arc::new(value),
+        });
     }
 
     pub fn resolve<T: Send + Sync + 'static>(&self) -> Result<Inject<T>, ContextError> {
-        self.map
-            .get(&TypeId::of::<T>())
-            .and_then(|any| Arc::clone(any).downcast::<T>().ok())
-            .map(Inject)
-            .ok_or(ContextError::NotFound { type_name: std::any::type_name::<T>() })
+        self.resolve_qualified::<T>(None)
+    }
+
+    /// Resolves by name, or unqualified when `name` is `None`.
+    /// `name` is `&'static str` because it ends up in a `ContextError`,
+    /// whose fields are static for the same reason component names are: they
+    /// come from the macro, and an owned `String` there would allocate on
+    /// every dependency resolution.
+    pub fn resolve_qualified<T: Send + Sync + 'static>(
+        &self,
+        name: Option<&'static str>,
+    ) -> Result<Inject<T>, ContextError> {
+        let entries = self.instances.get(&TypeId::of::<T>()).map(Vec::as_slice).unwrap_or_default();
+        pick(entries, name).and_then(|any| Arc::clone(any).downcast::<T>().ok()).map(Inject).ok_or(
+            ContextError::MissingDependency {
+                component: std::any::type_name::<T>(),
+                dependency: name.unwrap_or("<unqualified>"),
+            },
+        )
     }
 
     pub fn contains(&self, id: TypeId) -> bool {
-        self.map.contains_key(&id)
+        self.instances.contains_key(&id)
     }
 }
 
@@ -240,7 +312,7 @@ impl ContextBuilder {
 /// a hook's future.
 #[derive(Clone)]
 pub struct Context {
-    map: Arc<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    instances: Arc<HashMap<TypeId, Vec<Instance>>>,
     /// Keyed by `TypeId::of::<dyn Trait>()`; each entry holds the erased
     /// `Arc<dyn Trait>` handles contributed by [`TraitBinding`]s, in a
     /// deterministic order.
@@ -249,7 +321,39 @@ pub struct Context {
 
 impl Context {
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Inject<T>> {
-        self.map.get(&TypeId::of::<T>()).and_then(|any| Arc::clone(any).downcast::<T>().ok()).map(Inject)
+        self.get_qualified::<T>(None)
+    }
+
+    /// The instance of `T` registered under `name`.
+    ///
+    /// The `@Qualifier`/`@Autowired("beanName")` equivalent, for the case
+    /// where one type has several instances -- two HTTP clients against
+    /// different services, a primary and a replica connection.
+    pub fn get_named<T: Send + Sync + 'static>(&self, name: &str) -> Option<Inject<T>> {
+        self.get_qualified::<T>(Some(name))
+    }
+
+    /// [`get`](Self::get) or [`get_named`](Self::get_named), depending on
+    /// whether a name is given.
+    pub fn get_qualified<T: Send + Sync + 'static>(&self, name: Option<&str>) -> Option<Inject<T>> {
+        let entries = self.instances.get(&TypeId::of::<T>()).map(Vec::as_slice)?;
+        pick(entries, name).and_then(|any| Arc::clone(any).downcast::<T>().ok()).map(Inject)
+    }
+
+    /// Every instance of `T`, named or not, in registration order.
+    ///
+    /// Distinguishes "none registered" from "several and no primary", which
+    /// [`get`](Self::get) reports the same way.
+    pub fn get_all_named<T: Send + Sync + 'static>(&self) -> Vec<(Option<&'static str>, Inject<T>)> {
+        self.instances
+            .get(&TypeId::of::<T>())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|e| Arc::clone(&e.value).downcast::<T>().ok().map(|v| (e.name, Inject(v))))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Every component registered as an implementation of `T`, where `T` is
@@ -297,7 +401,7 @@ impl Context {
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Context")
-            .field("component_count", &self.map.len())
+            .field("component_count", &self.instances.len())
             .field("trait_count", &self.traits.len())
             .finish_non_exhaustive()
     }
@@ -380,10 +484,33 @@ pub fn assemble_with_bindings(
         (d.construct)(&mut seed)?;
     }
 
+    // Qualifier sanity, once every component has registered its instances.
+    // Both of these would otherwise surface as a lookup quietly returning
+    // the wrong instance, or `None`, at some point after boot.
+    for entries in seed.instances.values() {
+        let mut primary: Option<&'static str> = None;
+        let mut seen: Vec<&'static str> = Vec::new();
+        for entry in entries.iter() {
+            let label = entry.name.unwrap_or("<unnamed>");
+            if entry.primary {
+                if let Some(first) = primary {
+                    return Err(ContextError::DuplicatePrimary { type_name: entry.type_name, first, second: label });
+                }
+                primary = Some(label);
+            }
+            if let Some(name) = entry.name {
+                if seen.contains(&name) {
+                    return Err(ContextError::DuplicateName { type_name: entry.type_name, name });
+                }
+                seen.push(name);
+            }
+        }
+    }
+
     // Bindings run after every component exists: a binding resolves its
     // component out of the finished map, so it cannot run during
     // construction.
-    let base = Context { map: Arc::new(seed.map), traits: Arc::new(HashMap::new()) };
+    let base = Context { instances: Arc::new(seed.instances), traits: Arc::new(HashMap::new()) };
 
     let mut bindings = bindings;
     // Sorted by the component's type name so `get_all` returns a stable

@@ -5,6 +5,8 @@ mod component;
 mod config_properties;
 mod main_macro;
 
+mod configuration;
+
 use proc_macro::TokenStream;
 
 /// Marks a struct as an injectable singleton component.
@@ -33,4 +35,17 @@ pub fn config_properties(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn main(_args: TokenStream, item: TokenStream) -> TokenStream {
     main_macro::expand(item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// `@Configuration` — an impl block of `#[bean]` factory methods.
+///
+/// See [`configuration`](crate::configuration) for the full rationale; in
+/// short, this covers what `#[component]` cannot: types the application does
+/// not own, types built by a builder, and more than one instance of a type.
+#[proc_macro_attribute]
+pub fn configuration(args: TokenStream, item: TokenStream) -> TokenStream {
+    match configuration::expand(args.into(), item.into()) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }

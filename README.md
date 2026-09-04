@@ -742,6 +742,9 @@ so no extra quoting is needed for the common case.
 | `@SpringBootTest` | `TestApp::builder().start()` |
 | `@DataMongoTest` / `@DataRedisTest` / `@EmbeddedKafka` | `MongoTest::start()` / `RedisTest::start()` / `KafkaTest::start()` |
 | Beans of one interface as `List<T>` | `ctx.get_all::<dyn T>()` via `#[component(provides(T))]` |
+| `@Configuration` + `@Bean` | `#[configuration]` on an impl, `#[bean]` on factory methods |
+| `@Qualifier` / `@Autowired("name")` | `#[bean(name = "billing")]` + `ctx.get_named::<T>("billing")` |
+| `@Primary` | `#[bean(primary)]` |
 | Micrometer meter pre-registration | `MetricRegistration::counter(...)` |
 | `management.metrics.distribution.*` | `oxide.metrics.http.{enabled,histogram,buckets}` |
 | `server.ssl.*` | `oxide.server.ssl.{enabled,certificate,private-key}` (PEM) |
@@ -770,9 +773,16 @@ not, and the gap is worth knowing before betting on this:
 | `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
 
 Also missing from the DI container itself: `@Import`-style explicit
-configuration classes, `@Autowired("beanName")` qualifiers (resolution is by
-type, so one type means one instance), `@MockBean`-style replacement in tests,
-and pagination in derived queries.
+configuration classes, `@MockBean`-style replacement in tests, and pagination
+in derived queries.
+
+Resolution is no longer type-only. `#[configuration]` marks an impl block
+whose `#[bean]` methods are factories — which is how a type the application
+does not own, or a second instance of a type, gets into the container.
+`#[bean(name = "billing")]` qualifies an instance for
+`ctx.get_named::<T>("billing")`, and `#[bean(primary)]` chooses which one an
+unqualified lookup gets. An unqualified lookup with several candidates and no
+primary returns `None` rather than picking one.
 
 Injection by trait *is* now supported: `#[component(provides(Notifier))]`
 registers a component under a trait as well as its concrete type, and
