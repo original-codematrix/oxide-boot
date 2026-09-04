@@ -116,6 +116,8 @@ services:
       OXIDE_MONGO_URI: "mongodb://mongo:27017"
       OXIDE_REDIS_URL: "redis://dragonfly:6379"
       OXIDE_LOGGING_LEVEL_ROOT: "warn"
+      # Overridable so the benchmark can sweep it without editing this file.
+      OXIDE_KAFKA_CONSUMER_CONCURRENCY: "${KAFKA_CONCURRENCY:-4}"
     ports:
       # Only the HTTP surface is published, so k6 on the host still drives it.
       # That one crossing is unavoidable unless k6 runs in here too

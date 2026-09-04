@@ -4,6 +4,9 @@
 // a plain read, a write that also publishes to Kafka, and a path-parameter
 // read that must return RFC 7807 problem+json for a miss.
 
+// Every request sets an explicit `name` tag: k6 defaults it to the full URL,
+// which turns a path parameter into unbounded Prometheus cardinality.
+
 import http from 'k6/http';
 import { check, group } from 'k6';
 import { Rate } from 'k6/metrics';
@@ -34,7 +37,7 @@ export const options = {
 
 export default function () {
   group('list', () => {
-    const res = http.get(`${BASE}/api/notes`, { tags: { route: 'GET /api/notes' } });
+    const res = http.get(`${BASE}/api/notes`, { tags: { name: 'GET /api/notes', route: 'GET /api/notes' } });
     check(res, {
       'list 200': (r) => r.status === 200,
       'list is array': (r) => Array.isArray(r.json()),
@@ -46,7 +49,7 @@ export default function () {
     const payload = JSON.stringify({ id: 0, title: `note-${__VU}-${__ITER}`, body: 'load' });
     const res = http.post(`${BASE}/api/notes`, payload, {
       headers: { 'Content-Type': 'application/json' },
-      tags: { route: 'POST /api/notes' },
+      tags: { name: 'POST /api/notes', route: 'POST /api/notes' },
     });
     const ok = check(res, {
       'create 200': (r) => r.status === 200,
@@ -57,13 +60,13 @@ export default function () {
 
   group('read back', () => {
     if (createdId === null) return;
-    const res = http.get(`${BASE}/api/notes/${createdId}`, { tags: { route: 'GET /api/notes/{id}' } });
+    const res = http.get(`${BASE}/api/notes/${createdId}`, { tags: { name: 'GET /api/notes/{id}', route: 'GET /api/notes/{id}' } });
     check(res, { 'read back 200': (r) => r.status === 200 });
   });
 
   group('not found', () => {
     const res = http.get(`${BASE}/api/notes/999999999`, {
-      tags: { route: 'GET /api/notes/{id} (miss)' },
+      tags: { name: 'GET /api/notes/{id} (miss)', route: 'GET /api/notes/{id} (miss)' },
       // 404 is the expected outcome here, so it must not count as a failure.
       responseCallback: http.expectedStatuses(404),
     });
@@ -77,7 +80,7 @@ export default function () {
   });
 
   group('actuator', () => {
-    const res = http.get(`${MGMT}/actuator/health`, { tags: { route: 'GET /actuator/health' } });
+    const res = http.get(`${MGMT}/actuator/health`, { tags: { name: 'GET /actuator/health', route: 'GET /actuator/health' } });
     check(res, {
       'health 200': (r) => r.status === 200,
       'health is UP': (r) => r.json('status') === 'UP',

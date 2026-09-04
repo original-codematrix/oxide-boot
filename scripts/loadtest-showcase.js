@@ -4,6 +4,12 @@
 // target a small hot set so the Redis cache-aside path actually gets hits.
 // A run where every read misses would only measure Mongo.
 
+// NOTE ON TAGS: every request below sets an explicit `name` tag. k6 defaults
+// that tag to the full URL, so `/api/notes/<uuid>` would create one Prometheus
+// series per note -- a cardinality explosion that OOM-killed Prometheus and
+// froze the dashboard's k6 panels. `name` must stay a bounded set of route
+// templates.
+
 import http from 'k6/http';
 import { check, group } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
@@ -56,7 +62,7 @@ export default function () {
       });
       const res = http.post(`${BASE}/api/notes`, payload, {
         headers: { 'Content-Type': 'application/json' },
-        tags: { route: 'POST /api/notes' },
+        tags: { name: 'POST /api/notes', route: 'POST /api/notes' },
       });
       const ok = check(res, {
         'create 200': (r) => r.status === 200,
@@ -75,7 +81,10 @@ export default function () {
   group('read', () => {
     if (hot.length === 0) return;
     const id = hot[Math.floor(Math.random() * hot.length)];
-    const res = http.get(`${BASE}/api/notes/${id}`, { tags: { route: 'GET /api/notes/{id}' } });
+    // `name` is the template, not `${id}`: see the note at the top.
+    const res = http.get(`${BASE}/api/notes/${id}`, {
+      tags: { name: 'GET /api/notes/{id}', route: 'GET /api/notes/{id}' },
+    });
     check(res, {
       'read 200': (r) => r.status === 200,
       'read returns the right note': (r) => r.status === 200 && r.json('id') === id,
@@ -84,7 +93,10 @@ export default function () {
 
   group('list', () => {
     const tag = ['general', 'urgent', 'archive'][__ITER % 3];
-    const res = http.get(`${BASE}/api/notes?tag=${tag}`, { tags: { route: 'GET /api/notes' } });
+    // Likewise the tag value stays out of `name`.
+    const res = http.get(`${BASE}/api/notes?tag=${tag}`, {
+      tags: { name: 'GET /api/notes', route: 'GET /api/notes' },
+    });
     check(res, {
       'list 200': (r) => r.status === 200,
       'list is array': (r) => Array.isArray(r.json()),
@@ -93,7 +105,7 @@ export default function () {
 
   group('not found', () => {
     const res = http.get(`${BASE}/api/notes/does-not-exist`, {
-      tags: { route: 'GET /api/notes/{id} (miss)' },
+      tags: { name: 'GET /api/notes/{id} (miss)', route: 'GET /api/notes/{id} (miss)' },
       // 404 is the expected outcome here, so it must not count as a failure.
       responseCallback: http.expectedStatuses(404),
     });
@@ -110,12 +122,14 @@ export default function () {
   // watched, and hammering them would distort the mix the dashboard shows.
   if (__ITER % 20 === 0) {
     group('stats and health', () => {
-      const stats = http.get(`${BASE}/api/stats`, { tags: { route: 'GET /api/stats' } });
+      const stats = http.get(`${BASE}/api/stats`, { tags: { name: 'GET /api/stats', route: 'GET /api/stats' } });
       check(stats, {
         'stats 200': (r) => r.status === 200,
         'stats counts events': (r) => r.status === 200 && typeof r.json('events_consumed') === 'number',
       });
-      const health = http.get(`${MGMT}/actuator/health`, { tags: { route: 'GET /actuator/health' } });
+      const health = http.get(`${MGMT}/actuator/health`, {
+        tags: { name: 'GET /actuator/health', route: 'GET /actuator/health' },
+      });
       check(health, {
         'health 200': (r) => r.status === 200,
         'health is UP': (r) => r.json('status') === 'UP',
