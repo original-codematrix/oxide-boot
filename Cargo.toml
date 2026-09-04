@@ -140,3 +140,16 @@ debug = false
 # resolve to file and line without changing codegen.
 [profile.release]
 debug = "line-tables-only"
+# A framework spreads its hot path across a dozen crates, which is exactly the
+# boundary the default build refuses to inline across. `thin` rather than
+# `fat` because it buys most of the difference for a fraction of the link
+# time, and `codegen-units = 1` because the default of 16 splits each crate
+# into units that cannot see each other either.
+#
+# `panic = "abort"` is deliberately absent: nothing here uses `catch_unwind`,
+# so it would be safe, but `[profile.bench]` inherits from this one and
+# `cargo test --release` would stop building. `strip` is absent for the same
+# reason as the line above it -- it would delete the debug info the profiler
+# needs. The Docker image strips separately, in its build stage.
+lto = "thin"
+codegen-units = 1
