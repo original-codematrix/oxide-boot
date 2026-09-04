@@ -6,6 +6,7 @@ mod logging;
 pub use app::{AppBuilder, Application, BootError, OxideApplication};
 pub use logging::{LoggingInitializer, logging_directives};
 pub use oxide_core::Inject;
+pub mod circuit;
 pub mod retry;
 
 pub use oxide_macros::{ConfigProperties, component, configuration, main, retryable};

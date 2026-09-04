@@ -84,6 +84,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             /// Resolved once at construction rather than read per call, so
             /// the request path does no configuration lookup.
             pub __retry: ::oxide_client::ClientRetryProps,
+            /// `None` when the breaker is switched off, so the request path
+            /// has nothing to consult rather than a disabled breaker to
+            /// check on every call.
+            pub __circuit: ::core::option::Option<::oxide_client::__private::CircuitBreaker>,
         }
 
         impl #client_ident {
@@ -110,6 +114,10 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             /// default.
             #[serde(default)]
             pub retry: ::oxide_client::ClientRetryProps,
+            /// Circuit breaker, off unless configured. See
+            /// `oxide_client::ClientCircuitBreakerProps`.
+            #[serde(rename = "circuit-breaker", default)]
+            pub circuit_breaker: ::oxide_client::ClientCircuitBreakerProps,
         }
 
         impl ::core::default::Default for #props_ident {
@@ -118,6 +126,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                     connect_timeout_seconds: ::oxide_client::__private::default_connect_timeout_seconds(),
                     request_timeout_seconds: ::oxide_client::__private::default_request_timeout_seconds(),
                     retry: ::core::default::Default::default(),
+                    circuit_breaker: ::core::default::Default::default(),
                 }
             }
         }
@@ -144,7 +153,12 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                             type_name: #client_name_lit,
                             message: ::std::string::ToString::to_string(&e),
                         })?;
-                    __builder.insert(#client_ident { __client, __base_url, __retry: __props.retry.clone() });
+                    __builder.insert(#client_ident {
+                        __client,
+                        __base_url,
+                        __retry: __props.retry.clone(),
+                        __circuit: __props.circuit_breaker.breaker(#client_name_lit),
+                    });
                     ::core::result::Result::Ok(())
                 },
             )
@@ -273,8 +287,9 @@ fn generate_method(sig: &syn::Signature, verb: &str, sub_path: &str, client_name
     let route_template_lit = LitStr::new(sub_path, proc_macro2::Span::call_site());
 
     let send_call = quote! {
-        ::oxide_client::__private::send_with_retry(
-            &self.__client, __req, #client_lit, #metric_name, #route_template_lit, &self.__retry)
+        ::oxide_client::__private::send_guarded(
+            &self.__client, __req, #client_lit, #metric_name, #route_template_lit, &self.__retry,
+            self.__circuit.as_ref())
     };
 
     // Parse the return type: `Result<T, _>` → deserialize the body as `T`;

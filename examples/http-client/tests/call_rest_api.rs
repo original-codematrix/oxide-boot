@@ -108,6 +108,7 @@ async fn http_client_hits_real_server() {
         __client: reqwest::Client::new(),
         __base_url: format!("http://{addr}"),
         __retry: Default::default(),
+        __circuit: None,
     };
     let _ = BASE;
 
@@ -153,6 +154,7 @@ async fn path_injection_cannot_escape_the_route() {
         __client: reqwest::Client::new(),
         __base_url: format!("http://{addr}"),
         __retry: Default::default(),
+        __circuit: None,
     };
 
     let escaped = client.get_raw(Path("../notes".to_string())).await.expect_err("must not reach the list route");

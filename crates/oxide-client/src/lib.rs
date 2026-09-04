@@ -54,11 +54,12 @@ pub mod __private {
     pub use crate::send;
     pub use crate::{
         ClientError, default_connect_timeout_seconds, default_request_timeout_seconds, encode_path_segment,
-        resolve_base_url, send_with_retry,
+        resolve_base_url, send_guarded, send_with_retry,
     };
     pub use inventory;
     pub use oxide_boot::__private::{AppConfig, ComponentDescriptor, ContextError};
     pub use oxide_boot::ConfigProperties;
+    pub use oxide_boot::circuit::CircuitBreaker;
     pub use serde;
 }
 
@@ -151,6 +152,106 @@ impl ClientRetryProps {
             max_backoff: std::time::Duration::from_millis(self.max_backoff_ms),
             jitter: self.jitter,
         }
+    }
+}
+
+/// A circuit breaker for one client, off unless configured.
+///
+/// ```yaml
+/// oxide:
+///   clients:
+///     notes:
+///       circuit-breaker:
+///         enabled: true
+///         window-size: 20
+///         minimum-calls: 10
+///         failure-rate-threshold: 0.5
+///         open-duration-seconds: 30
+/// ```
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ClientCircuitBreakerProps {
+    /// Off by default, for the same reason retrying is: a breaker that opens
+    /// unexpectedly looks like an outage that is not happening.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_window_size")]
+    pub window_size: usize,
+    #[serde(default = "default_minimum_calls")]
+    pub minimum_calls: usize,
+    #[serde(default = "default_failure_rate_threshold")]
+    pub failure_rate_threshold: f64,
+    #[serde(default = "default_open_duration_seconds")]
+    pub open_duration_seconds: u64,
+}
+
+fn default_window_size() -> usize {
+    20
+}
+fn default_minimum_calls() -> usize {
+    10
+}
+fn default_failure_rate_threshold() -> f64 {
+    0.5
+}
+fn default_open_duration_seconds() -> u64 {
+    30
+}
+
+impl Default for ClientCircuitBreakerProps {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_size: default_window_size(),
+            minimum_calls: default_minimum_calls(),
+            failure_rate_threshold: default_failure_rate_threshold(),
+            open_duration_seconds: default_open_duration_seconds(),
+        }
+    }
+}
+
+impl ClientCircuitBreakerProps {
+    /// Builds the breaker for a client, or `None` when it is switched off --
+    /// so the request path has no breaker to consult at all rather than a
+    /// disabled one to check on every call.
+    pub fn breaker(&self, client_name: &'static str) -> Option<oxide_boot::circuit::CircuitBreaker> {
+        if !self.enabled {
+            return None;
+        }
+        Some(oxide_boot::circuit::CircuitBreaker::new(
+            client_name,
+            oxide_boot::circuit::CircuitBreakerConfig {
+                enabled: true,
+                window_size: self.window_size,
+                minimum_calls: self.minimum_calls,
+                failure_rate_threshold: self.failure_rate_threshold,
+                open_duration: std::time::Duration::from_secs(self.open_duration_seconds),
+            },
+        ))
+    }
+}
+
+/// Whether a failure means *the upstream is unhealthy*, which is a narrower
+/// question than whether it is worth retrying.
+///
+/// A 4xx does not count. The service answered, correctly, that the request
+/// was wrong -- a client that fetches many missing resources would otherwise
+/// open the circuit against a perfectly healthy dependency, and then the
+/// calls that *would* have succeeded fail too. What counts is a transport
+/// failure, a 5xx, or a 429: the upstream is down, broken, or shedding load,
+/// and backing off is the useful response to all three.
+///
+/// This deliberately differs from [`is_retryable`], which excludes 501 and
+/// 505: those are not worth *repeating*, but they are still the upstream
+/// failing to serve us.
+fn counts_against_the_circuit(error: &ClientError) -> bool {
+    match error {
+        ClientError::Http { status, .. } => status.is_server_error() || status.as_u16() == 429,
+        ClientError::Transport(_) => true,
+        // Build, Json and Config never reached the network, and CircuitOpen
+        // is the breaker's own answer -- counting it would keep the circuit
+        // open forever by feeding it its own output.
+        _ => false,
     }
 }
 
@@ -255,6 +356,42 @@ pub async fn send_with_retry(
             .increment(1);
         tokio::time::sleep(delay).await;
     }
+}
+
+/// [`send_with_retry`] behind a circuit breaker.
+///
+/// The order is deliberate: **breaker outside, retry inside**. With an open
+/// circuit nothing is attempted at all -- a retry loop behind an open breaker
+/// would be pure waiting. And because the outcome is recorded once, after the
+/// loop, an exhausted retry counts as *one* failure rather than three;
+/// otherwise a breaker configured for ten failures would open after four.
+pub async fn send_guarded(
+    client: &reqwest::Client,
+    req: reqwest::RequestBuilder,
+    client_name: &str,
+    method: &str,
+    route_template: &str,
+    retry: &ClientRetryProps,
+    breaker: Option<&oxide_boot::circuit::CircuitBreaker>,
+) -> Result<reqwest::Response, ClientError> {
+    let Some(breaker) = breaker else {
+        return send_with_retry(client, req, client_name, method, route_template, retry).await;
+    };
+
+    if breaker.check() == oxide_boot::circuit::Decision::Reject {
+        metrics::counter!("http_client_circuit_rejected_total", "client" => client_name.to_string()).increment(1);
+        return Err(ClientError::CircuitOpen { client: client_name.to_string() });
+    }
+
+    let outcome = send_with_retry(client, req, client_name, method, route_template, retry).await;
+    match &outcome {
+        Ok(_) => breaker.record_success(),
+        Err(e) if counts_against_the_circuit(e) => breaker.record_failure(),
+        // A 4xx still has to be reported, or a half-open probe that returns
+        // one leaves the probe in flight and the circuit never closes again.
+        Err(_) => breaker.record_success(),
+    }
+    outcome
 }
 
 /// `record_retry` takes a `&'static str` for the same reason metric labels

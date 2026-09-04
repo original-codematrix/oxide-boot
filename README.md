@@ -596,7 +596,7 @@ resolves from `oxide.clients.billing.url`. Each call:
   route template, so a value can't inject an extra path segment or a query
   string.
 
-Each client gets its own connect/request timeouts, under
+Each client gets its own timeouts, retry policy and circuit breaker, under
 `oxide.clients.<name>`:
 
 ```yaml
@@ -606,7 +606,31 @@ oxide:
       url: "http://localhost:9000"
       connect-timeout-seconds: 5     # default
       request-timeout-seconds: 30    # default
+      retry:
+        max-attempts: 1              # default: 1 = off
+        backoff-ms: 100              # default
+        max-backoff-ms: 5000         # default
+        multiplier: 2.0              # default
+        jitter: 0.25                 # default
+        retry-non-idempotent: false  # default: POST/PATCH are not retried
+      circuit-breaker:
+        enabled: false               # default
+        window-size: 20              # default
+        minimum-calls: 10            # default
+        failure-rate-threshold: 0.5  # default
+        open-duration-seconds: 30    # default
 ```
+
+Both are off by default: a retry that repeats a lost `POST` duplicates the
+write, and a breaker that opens unexpectedly looks to the caller like an
+outage that is not happening.
+
+**Breaker outside, retry inside.** With an open circuit nothing is attempted
+at all, and the call fails immediately with `ClientError::CircuitOpen`
+without opening a connection. An exhausted retry counts as *one* failure for
+the breaker rather than three, and a `4xx` counts as none — the upstream
+answered correctly that the request was wrong, and a client fetching many
+missing resources must not break itself against a healthy dependency.
 
 Run the example end-to-end:
 ```sh
@@ -621,7 +645,8 @@ cargo test -p http-client        # boots an in-process server and calls the clie
 | `@PathVariable String id` | `id: Path<String>` |
 | `@RequestBody X body` | `body: Json<X>` |
 | `FeignException` / `ResponseEntity` | `ClientError::Http { status, body }` |
-| `spring.cloud.openfeign...` | `oxide.clients.<name>.url` (connect/request timeouts configurable; retry is on the phase-4c backlog) |
+| `spring.cloud.openfeign...` | `oxide.clients.<name>.url`, `.connect-timeout-seconds`, `.request-timeout-seconds` |
+| Resilience4j `CircuitBreaker` | `oxide.clients.<name>.circuit-breaker.*` — off by default |
 
 ## Tests (oxide-test)
 
@@ -741,6 +766,7 @@ so no extra quoting is needed for the common case.
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient(url = "${svc.url}")` | `#[http_client(base_url = "${svc.url}")]` |
 | Feign `Retryer` | `oxide.clients.<name>.retry.*` — off by default |
+| Resilience4j `@CircuitBreaker` | `oxide.clients.<name>.circuit-breaker.*` — off by default |
 | `@Retryable` / spring-retry | `#[retryable(max_attempts = 4, retry_if = "...")]` |
 | `@Recover` | `#[retryable(recover = "fallback")]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |

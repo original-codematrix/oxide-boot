@@ -23,6 +23,10 @@ pub enum ClientError {
     Json(String),
     #[error("{0}")]
     Config(String),
+    /// The circuit breaker for this client is open: the request was not
+    /// attempted, and no connection was opened.
+    #[error("circuit breaker for client '{client}' is open; request not attempted")]
+    CircuitOpen { client: String },
     #[error("client error: {0}")]
     Other(String),
 }
