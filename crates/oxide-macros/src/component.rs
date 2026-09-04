@@ -254,3 +254,92 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quote::quote;
+
+    fn args(input: proc_macro2::TokenStream) -> ComponentArgs {
+        parse_args(input).expect("valid arguments")
+    }
+
+    fn error(input: proc_macro2::TokenStream) -> String {
+        // `ComponentArgs` holds `syn` types that are not `Debug`, so
+        // `expect_err` is not available; match instead.
+        match parse_args(input) {
+            Ok(_) => panic!("expected a rejection"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn no_arguments_means_no_hooks_and_the_default_slot() {
+        let a = args(quote! {});
+        assert!(a.post_construct.is_none());
+        assert!(a.pre_destroy.is_none());
+        assert!(a.provides.is_empty());
+        // Zero is the ordinary teardown slot; telemetry sits at 100 so it
+        // outlives everything that produces spans.
+        assert_eq!(a.destroy_order, 0);
+    }
+
+    #[test]
+    fn a_hook_can_ask_for_the_context() {
+        let plain = args(quote! { post_construct = connect });
+        assert_eq!(plain.post_construct.as_ref().map(ToString::to_string), Some("connect".to_string()));
+        assert!(!plain.post_construct_with_ctx);
+
+        let with_ctx = args(quote! { post_construct = connect(ctx) });
+        assert!(with_ctx.post_construct_with_ctx, "the (ctx) form was not recognised");
+    }
+
+    #[test]
+    fn only_ctx_is_accepted_as_a_hook_argument() {
+        // A hook taking anything else would compile into a call the
+        // container cannot satisfy; rejecting it here names the problem.
+        let message = error(quote! { post_construct = connect(other) });
+        assert!(message.contains("ctx"), "was: {message}");
+    }
+
+    #[test]
+    fn destroy_order_accepts_negative_values() {
+        // Negative slots tear down *before* the default, which is how a
+        // component can be stopped ahead of its dependencies.
+        assert_eq!(args(quote! { destroy_order = -100 }).destroy_order, -100);
+        assert_eq!(args(quote! { destroy_order = 100 }).destroy_order, 100);
+    }
+
+    #[test]
+    fn a_destroy_order_outside_i32_is_rejected() {
+        // Silently wrapping would reorder shutdown in a way nobody could
+        // trace back to the literal.
+        let message = error(quote! { destroy_order = 99999999999999999999 });
+        assert!(message.contains("i32"), "was: {message}");
+    }
+
+    #[test]
+    fn provides_takes_one_or_several_traits() {
+        let one = args(quote! { provides(Notifier) });
+        assert_eq!(one.provides.len(), 1);
+
+        let several = args(quote! { provides(Notifier, Auditable) });
+        assert_eq!(several.provides.len(), 2);
+    }
+
+    #[test]
+    fn provides_combines_with_the_other_arguments() {
+        let a = args(quote! { post_construct = start, provides(Notifier), destroy_order = 10 });
+        assert!(a.post_construct.is_some());
+        assert_eq!(a.provides.len(), 1);
+        assert_eq!(a.destroy_order, 10);
+    }
+
+    #[test]
+    fn an_unknown_argument_lists_what_is_accepted() {
+        let message = error(quote! { on_start = go });
+        for expected in ["post_construct", "pre_destroy", "destroy_order", "provides"] {
+            assert!(message.contains(expected), "'{expected}' missing from: {message}");
+        }
+    }
+}

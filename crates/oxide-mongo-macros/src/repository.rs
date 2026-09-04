@@ -445,3 +445,138 @@ fn expand_query_method(attrs: &[Attribute], sig: &Signature) -> Result<TokenStre
         #driver
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- verb prefixes -------------------------------------------------
+
+    #[test]
+    fn the_longest_matching_verb_wins() {
+        // `find_all_by_` and `find_by_` share a prefix. Checking `find_by_`
+        // first would make `find_all_by_tag` parse as a single-result query
+        // over a field called `all_by_tag`.
+        assert_eq!(derive_verb("find_all_by_tag"), Some(("find_all", "tag".into())));
+        assert_eq!(derive_verb("find_by_tag"), Some(("find", "tag".into())));
+    }
+
+    #[test]
+    fn every_supported_verb_is_recognised() {
+        assert_eq!(derive_verb("count_by_status"), Some(("count", "status".into())));
+        assert_eq!(derive_verb("exists_by_email"), Some(("exists", "email".into())));
+        assert_eq!(derive_verb("delete_by_id"), Some(("delete", "id".into())));
+    }
+
+    #[test]
+    fn a_name_without_a_verb_is_not_derived() {
+        // These fall through to the CRUD table or to an error, and must not
+        // be mistaken for conditions.
+        assert_eq!(derive_verb("save"), None);
+        assert_eq!(derive_verb("find_all"), None);
+        assert_eq!(derive_verb("findByTag"), None, "camelCase is not the convention here");
+        // A verb with no field after it: the prefix matches but the
+        // condition is empty, which `parse_conditions` rejects.
+        assert_eq!(derive_verb("find_by_"), Some(("find", String::new())));
+    }
+
+    // ---- operators -----------------------------------------------------
+
+    #[test]
+    fn a_bare_field_compares_for_equality() {
+        assert_eq!(parse_field_and_op("status"), ("status".into(), "$eq".into()));
+    }
+
+    #[test]
+    fn every_operator_suffix_maps_to_its_mongo_operator() {
+        for (suffix, expected) in [
+            ("_greater_than", "$gt"),
+            ("_greater_than_equal", "$gte"),
+            ("_less_than", "$lt"),
+            ("_less_than_equal", "$lte"),
+            ("_in", "$in"),
+            ("_not", "$ne"),
+            ("_like", "$regex"),
+            ("_is_null", "$null"),
+            ("_is_not_null", "$notnull"),
+        ] {
+            let (field, op) = parse_field_and_op(&format!("age{suffix}"));
+            assert_eq!(op, expected, "suffix {suffix}");
+            assert_eq!(field, "age", "suffix {suffix} ate part of the field name");
+        }
+    }
+
+    #[test]
+    fn longer_operator_suffixes_are_tried_first() {
+        // `_greater_than` is a suffix of `_greater_than_equal`, and `_is_null`
+        // of `_is_not_null`. Order in the table is load-bearing: the wrong
+        // one produces a silently wrong comparison rather than an error.
+        assert_eq!(parse_field_and_op("age_greater_than_equal"), ("age".into(), "$gte".into()));
+        assert_eq!(parse_field_and_op("age_less_than_equal"), ("age".into(), "$lte".into()));
+        assert_eq!(parse_field_and_op("deleted_at_is_not_null"), ("deleted_at".into(), "$notnull".into()));
+    }
+
+    #[test]
+    fn a_field_whose_name_ends_like_an_operator_is_a_known_hazard() {
+        // `login` ends in `_in` only if the underscore is there; `login` has
+        // none, so it is safe. A field genuinely named `last_in` is not, and
+        // this pins the behaviour rather than claiming it is correct.
+        assert_eq!(parse_field_and_op("login"), ("login".into(), "$eq".into()));
+        assert_eq!(parse_field_and_op("last_in"), ("last".into(), "$in".into()));
+    }
+
+    #[test]
+    fn marker_operators_take_no_argument() {
+        assert!(is_marker_op("$null"));
+        assert!(is_marker_op("$notnull"));
+        // Everything else consumes one method parameter; treating `$eq` as a
+        // marker would shift every subsequent argument by one.
+        for op in ["$eq", "$gt", "$gte", "$lt", "$lte", "$in", "$ne", "$regex"] {
+            assert!(!is_marker_op(op), "{op} must consume an argument");
+        }
+    }
+
+    // ---- conditions ----------------------------------------------------
+
+    fn sig(name: &str) -> Signature {
+        let ident = syn::Ident::new(name, proc_macro2::Span::call_site());
+        syn::parse_quote! { async fn #ident(&self) -> () }
+    }
+
+    #[test]
+    fn conditions_split_on_and() {
+        let parsed = parse_conditions("status_and_age_greater_than", &sig("find_all_by_x")).unwrap();
+        assert_eq!(parsed, vec![("status".into(), "$eq".into()), ("age".into(), "$gt".into())]);
+    }
+
+    #[test]
+    fn a_single_condition_needs_no_separator() {
+        let parsed = parse_conditions("email", &sig("find_by_email")).unwrap();
+        assert_eq!(parsed, vec![("email".into(), "$eq".into())]);
+    }
+
+    #[test]
+    fn a_marker_can_be_mixed_with_a_value_condition() {
+        // The shape that once misaligned arguments: a no-argument marker
+        // between two value conditions.
+        let parsed = parse_conditions("status_and_deleted_at_is_null_and_age", &sig("find_all_by_x")).unwrap();
+        assert_eq!(
+            parsed,
+            vec![("status".into(), "$eq".into()), ("deleted_at".into(), "$null".into()), ("age".into(), "$eq".into()),]
+        );
+        assert_eq!(parsed.iter().filter(|(_, op)| !is_marker_op(op)).count(), 2, "two arguments expected");
+    }
+
+    #[test]
+    fn an_empty_field_name_is_rejected() {
+        // `find_all_by_status_and_` — a trailing separator.
+        let err = parse_conditions("status_and_", &sig("find_all_by_status_and_")).unwrap_err();
+        assert!(err.to_string().contains("empty field name"), "was: {err}");
+    }
+
+    #[test]
+    fn a_field_name_may_contain_underscores() {
+        let parsed = parse_conditions("created_at", &sig("find_all_by_created_at")).unwrap();
+        assert_eq!(parsed, vec![("created_at".into(), "$eq".into())]);
+    }
+}

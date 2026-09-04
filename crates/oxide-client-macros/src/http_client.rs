@@ -320,3 +320,45 @@ fn returned_ok_type(out: &syn::ReturnType) -> Option<syn::Type> {
 fn type_last(ty: &Type) -> Option<String> {
     if let Type::Path(tp) = ty { tp.path.segments.last().map(|s| s.ident.to_string()) } else { None }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `name_to_snake` derives the config prefix (`oxide.clients.<name>`) and
+    // the `client` metric label from the trait's identifier. Getting it
+    // wrong means configuration silently does not apply and dashboards group
+    // by the wrong key -- neither of which fails loudly.
+
+    #[test]
+    fn camel_case_becomes_snake_case() {
+        assert_eq!(name_to_snake("NotesClient"), "notes");
+        assert_eq!(name_to_snake("BillingServiceClient"), "billing_service");
+    }
+
+    #[test]
+    fn the_client_suffix_is_dropped_with_its_separator() {
+        // `notes_client` would make every config key read
+        // `oxide.clients.notes_client.*`, which nobody would write.
+        assert_eq!(name_to_snake("NotesClient"), "notes");
+        assert_eq!(name_to_snake("Notes"), "notes", "a trait without the suffix keeps its name");
+    }
+
+    #[test]
+    fn a_trait_called_client_keeps_a_usable_name() {
+        // Stripping the suffix would leave an empty prefix, and
+        // `oxide.clients..connect-timeout-seconds` binds to nothing.
+        assert_eq!(name_to_snake("Client"), "client");
+    }
+
+    #[test]
+    fn consecutive_capitals_are_not_split_between_every_letter() {
+        // `HTTPClient` must not become `h_t_t_p_client`.
+        assert_eq!(name_to_snake("HTTPClient"), "httpclient".strip_suffix("client").unwrap_or("httpclient"));
+    }
+
+    #[test]
+    fn a_lowercase_name_passes_through() {
+        assert_eq!(name_to_snake("notes"), "notes");
+    }
+}

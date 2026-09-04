@@ -125,13 +125,46 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
 #[cfg(test)]
 mod tests {
-    use super::join_paths;
+    use super::*;
+
+    // `join_paths` builds every mounted route from the controller's base and
+    // the method's sub-path. A double slash or a missing one produces a
+    // route that silently never matches.
 
     #[test]
-    fn joins_base_and_subpath() {
-        assert_eq!(join_paths("/api/users", "/{id}"), "/api/users/{id}");
-        assert_eq!(join_paths("/api/users", ""), "/api/users");
-        assert_eq!(join_paths("/api/users/", "/{id}"), "/api/users/{id}");
+    fn a_base_and_a_sub_path_are_joined_with_one_slash() {
+        assert_eq!(join_paths("/api/notes", "/{id}"), "/api/notes/{id}");
+        // Whichever side carries the slash, and even when both do.
+        assert_eq!(join_paths("/api/notes", "{id}"), "/api/notes/{id}");
+        assert_eq!(join_paths("/api/notes/", "/{id}"), "/api/notes/{id}");
+        assert_eq!(join_paths("/api/notes/", "{id}"), "/api/notes/{id}");
+    }
+
+    #[test]
+    fn an_empty_sub_path_mounts_the_base_itself() {
+        // `#[get("")]` on a controller: the collection endpoint.
+        assert_eq!(join_paths("/api/notes", ""), "/api/notes");
+        assert_eq!(join_paths("/api/notes/", ""), "/api/notes");
+    }
+
+    #[test]
+    fn an_empty_base_uses_the_sub_path_alone() {
+        // A controller without a prefix.
+        assert_eq!(join_paths("", "/health"), "/health");
+        assert_eq!(join_paths("", "health"), "/health");
+    }
+
+    #[test]
+    fn the_root_route_stays_a_single_slash() {
+        // Trimming both sides to nothing would produce "", which axum
+        // rejects; it has to come back as "/".
         assert_eq!(join_paths("", ""), "/");
+        assert_eq!(join_paths("/", ""), "/");
+        assert_eq!(join_paths("/", "/"), "/");
+    }
+
+    #[test]
+    fn a_nested_sub_path_keeps_its_segments() {
+        assert_eq!(join_paths("/api", "/notes/{id}/comments"), "/api/notes/{id}/comments");
     }
 }
