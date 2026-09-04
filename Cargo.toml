@@ -36,6 +36,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
+description = "A Spring-Boot-like application framework for Rust"
+repository = "https://github.com/original-codematrix/oxide-boot"
 # V1 does not publish to crates.io; every workspace library crate sets
 # `publish.workspace = true` to pick this up.
 publish = false

@@ -4,10 +4,14 @@ A Spring-Boot-like application framework for Rust: components, dependency
 injection, `application.yml` with profiles, and an opinionated boot lifecycle —
 built on Tokio and battle-tested crates.
 
-**Status: Phase 3 (integrations) complete; Phase 4 (hardening) in progress.**
-Web, observability, Kafka, MongoDB, HTTP client and test starters are
-implemented — see `docs/design/specs/` for the design and the phase-4
-hardening backlog.
+**Status: pre-1.0 and moving.** The web, observability, Kafka, MongoDB, Redis,
+cache, scheduler, HTTP client and test starters are implemented, along with
+dependency injection by type and name, `@Configuration`-style bean factories,
+declarative retry, and a circuit breaker for outbound calls. There is no
+security starter yet, and no SQL support. See `docs/design/` for the design
+documents and the phase plans behind each of those.
+
+APIs are not stable and nothing is published to crates.io.
 
 ## Quick start
 
@@ -868,3 +872,22 @@ offset commit against the recreated, empty partitions trips an internal
 assertion (`Empty batch written to __consumer_offsets`) and the broker exits
 133. Reproduced twice. `scripts/benchmark.sh` therefore deletes the consumer
 group before the topic; if you write your own reset step, do the same.
+
+## Licence
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT licence ([LICENSE-MIT](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work by you, as defined in the Apache-2.0
+licence, shall be dual-licensed as above, without any additional terms or
+conditions.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to run the checks, and
+[SECURITY.md](SECURITY.md) for how to report a vulnerability.

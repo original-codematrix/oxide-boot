@@ -1,0 +1,92 @@
+# Mirrors the Makefile rather than restating it. `make` is the local entry
+# point and stays authoritative; this file only decides what runs where.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The advisory database moves without the code moving, so the audit job
+    # runs on its own even when nothing is pushed.
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  # A CI cache is cheap; rebuilding librdkafka is not.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    name: fmt, clippy, unit + smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rdkafka is built from source (`cmake-build`), and the `security`
+      # feature is on by default, so the SSL and SASL headers have to be
+      # present. Without them the failure is a linker error that does not
+      # mention Kafka at all.
+      - name: Install librdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+      # rust-toolchain.toml pins the version and pulls in rustfmt + clippy.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: make fmt
+      - run: make clippy
+      # The Docker-free half of the suite: every crate's unit tests plus a
+      # full application boot serving real requests.
+      - run: make smoke
+
+  test:
+    name: full test suite (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install librdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      # Nine test files start their own containers (Kafka, MongoDB, Redis).
+      # GitHub-hosted runners ship a Docker daemon, so nothing else is needed
+      # here -- but this job is the slow one, which is why `check` exists
+      # separately and fails first.
+      - run: cargo test --workspace
+
+  msrv:
+    name: MSRV 1.88
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install librdkafka build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+      # The declared MSRV, deliberately not the pinned toolchain: the point is
+      # to catch a newly used feature that raises the floor without anyone
+      # noticing.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.88 check --workspace --all-targets
+
+  audit:
+    name: advisories and licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit cargo-deny --locked
+      # `deny.toml` covers licences, duplicate versions and sources; the audit
+      # covers RUSTSEC advisories.
+      - run: make audit
