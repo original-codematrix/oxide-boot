@@ -72,6 +72,7 @@ proc-macro2 = "1"
 trybuild = "1"
 tempfile = "3"
 redis = { version = "1", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
 opentelemetry = "0.32"

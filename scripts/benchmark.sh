@@ -48,6 +48,16 @@ IN_NETWORK="${IN_NETWORK:-0}"
 # cache-hit route that alone was worth +59% (17.2k -> 27.4k req/s). Requires
 # IN_NETWORK=1, since it addresses the service by its compose name.
 K6_IN_NETWORK="${K6_IN_NETWORK:-0}"
+# Messages per second injected into the topic *during* the load phase, on top
+# of what the REST writes produce. This is what makes the lag scenario
+# realistic: a backlog that is only ever drained down is not the situation a
+# consumer actually faces, since production does not stop while it catches up.
+# 0 disables it.
+PRODUCE_DURING_LOAD="${PRODUCE_DURING_LOAD:-0}"
+# How much of the seeded backlog to drain before the load phase starts. 100
+# means drain it fully (the isolated consumer measurement); a value below 100
+# leaves a real lag standing when the HTTP load arrives.
+DRAIN_PERCENT="${DRAIN_PERCENT:-100}"
 DURATION="${DURATION:-60s}"
 OUT="${OUT:-$ROOT/target/benchmark}"
 
@@ -161,6 +171,8 @@ if [[ "$CONCURRENT" == "1" ]]; then
   drain_consumed=$(counter showcase_events_consumed_total); drain_consumed=${drain_consumed%.*}
 else
 drain_start=$(date +%s)
+drain_target=$(( KAFKA_SEED * DRAIN_PERCENT / 100 ))
+[[ "$DRAIN_PERCENT" -lt 100 ]] && echo "    draining to ${DRAIN_PERCENT}% ($drain_target of $KAFKA_SEED), leaving a lag standing"
 prev=0
 stable=0
 while :; do
@@ -168,8 +180,8 @@ while :; do
   consumed=${consumed%.*}
   now=$(date +%s)
   elapsed=$(( now - drain_start ))
-  if [[ "$consumed" -ge "$KAFKA_SEED" ]]; then
-    echo "    drained $consumed/$KAFKA_SEED in ${elapsed}s"
+  if [[ "$consumed" -ge "$drain_target" ]]; then
+    echo "    drained $consumed/$KAFKA_SEED (target $drain_target) in ${elapsed}s"
     break
   fi
   # No progress for 30 consecutive seconds means the listener is wedged; a
@@ -179,7 +191,7 @@ while :; do
     [[ "$stable" -ge 30 ]] && { echo "    consumer stalled at $consumed/$KAFKA_SEED after ${elapsed}s" >&2; break; }
   else
     stable=0
-    printf "\r    %s/%s (%ss)" "$consumed" "$KAFKA_SEED" "$elapsed"
+    printf "\r    %s/%s (%ss)" "$consumed" "$drain_target" "$elapsed"
   fi
   prev=$consumed
   [[ "$elapsed" -gt 900 ]] && { echo; echo "    giving up after 15 minutes" >&2; break; }
@@ -228,6 +240,17 @@ if [[ -n "$APP_PID" ]]; then
 fi
 sample_containers "$OUT/containers.txt" &
 CONTAINER_SAMPLER_PID=$!
+
+PRODUCER_PID=""
+if [[ "$PRODUCE_DURING_LOAD" != "0" ]]; then
+  # Runs for longer than k6 does (ramp up + hold + ramp down + slack), so
+  # production never stops before the load does.
+  produce_seconds=$(( $(echo "$DURATION" | tr -dc '0-9') + 40 ))
+  echo "    injecting ${PRODUCE_DURING_LOAD} msg/s into notes-events for ${produce_seconds}s alongside the load"
+  ./target/release/seed --rate "$PRODUCE_DURING_LOAD" --for-seconds "$produce_seconds" \
+    > "$OUT/producer.log" 2>&1 &
+  PRODUCER_PID=$!
+fi
 echo "    Grafana: http://localhost:3000/d/oxide-showcase"
 before_consumed=$drain_consumed
 before_ts=$(date +%s)
@@ -257,6 +280,10 @@ K6_PROMETHEUS_RW_PUSH_INTERVAL="2s" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true
 fi
 
+if [[ -n "$PRODUCER_PID" ]]; then
+  wait "$PRODUCER_PID" 2>/dev/null || true
+  grep -E '^\[seed\] steady producer' "$OUT/producer.log" | sed 's/^/  /' || true
+fi
 kill ${SAMPLER_PID:-} "$CONTAINER_SAMPLER_PID" 2>/dev/null || true
 
 after_consumed=$(counter showcase_events_consumed_total); after_consumed=${after_consumed%.*}
@@ -283,14 +310,19 @@ print(f"  HTTP p50 / p95 / p99 (ms) ... {g('http_req_duration','med')} / {g('htt
 print(f"  HTTP failure rate ............ {g('http_req_failed','rate',100)}%")
 print(f"  Iterations/s ................. {g('iterations','rate')}")
 PY
-if [[ "$CONCURRENT" == "1" ]]; then
-  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (backlog present: this is capacity)"
-  remaining=$(( KAFKA_SEED + after_produced - after_consumed ))
-  echo "  Backlog still outstanding .... ${remaining}"
+# Whether the consume rate is a capacity measurement depends on one thing
+# only: was there a backlog for the consumer to eat during the load phase?
+# Ask the broker rather than inferring it from which flags were set.
+TOTAL_LAG=$($RPK group describe showcase 2>/dev/null \
+  | awk '$1 == "notes-events" { sum += $5 } END { print sum + 0 }')
+[[ "$DRAIN_PERCENT" -lt 100 ]] && echo "  Kafka consume rate, idle ..... ~${DRAIN_RATE} msg/s  (drained to ${DRAIN_PERCENT}%)"
+[[ "$DRAIN_PERCENT" -ge 100 && "$CONCURRENT" != "1" ]] && echo "  Kafka consume rate, idle ..... ~${DRAIN_RATE} msg/s"
+if [[ "${TOTAL_LAG:-0}" -gt 1000 ]]; then
+  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (${TOTAL_LAG} still lagging:"
+  echo "                                  the consumer was never idle, so this IS its capacity)"
 else
-  echo "  Kafka consume rate, idle ..... ~${DRAIN_RATE} msg/s"
-  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (backlog was empty: this tracks"
-  echo "                                  the produce rate, it is NOT a capacity measurement)"
+  echo "  Kafka consumed during load ... ~${LOAD_CONSUME_RATE} msg/s  (lag ${TOTAL_LAG:-0}: the consumer"
+  echo "                                  kept up, so this tracks the produce rate, not capacity)"
 fi
 echo
 if [[ "$IN_NETWORK" == "1" ]]; then
@@ -316,6 +348,11 @@ print(f"    CPU avg / peak ............. {sum(cpu)/len(cpu):.0f}% / {max(cpu):.0
 print(f"    RSS avg / peak ............. {sum(rss)/len(rss)/1024:.0f} MB / {max(rss)/1024:.0f} MB")
 print(f"    samples .................... {len(cpu)} (1/s)")
 PY2
+
+echo
+echo "  consumer lag per partition at the broker (authoritative, not inferred):"
+$RPK group describe showcase 2>/dev/null \
+  | awk '/PARTITION/{p=1} p{print "    " $0}' | head -12 || echo "    (unavailable)"
 
 echo
 echo "  backing services (docker stats, %CPU is of one core):"

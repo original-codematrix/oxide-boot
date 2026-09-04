@@ -23,6 +23,8 @@ opentelemetry_sdk = { workspace = true, features = ["testing"] }
 opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
 tokio.workspace = true
+# Process self-metrics (CPU, RSS) for /actuator/prometheus.
+sysinfo.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

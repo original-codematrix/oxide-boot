@@ -87,7 +87,11 @@ services:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
-    mem_limit: 1g
+    # 2 GB: 1 GB was not enough to replay the write-ahead log of an earlier,
+    # unbounded run, so Prometheus was OOM-killed on every restart until its
+    # data was discarded. The retention caps above keep it from getting there
+    # again.
+    mem_limit: 2g
     extra_hosts:
       # Linux hosts do not define this name for us the way Docker Desktop does.
       - "host.docker.internal:host-gateway"

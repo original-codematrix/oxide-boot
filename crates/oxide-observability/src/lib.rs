@@ -12,8 +12,10 @@ mod http;
 mod logging;
 mod metrics;
 pub mod otel;
+pub mod process;
 
 pub use crate::metrics::prometheus_handle;
+pub use crate::process::ProcessMetricsProps;
 
 use oxide_boot::component;
 

@@ -98,3 +98,36 @@ async fn http_requests_are_measured_with_route_template_labels() {
 
     app.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn process_metrics_are_exported_after_boot() {
+    let _guard = BOOT_LOCK.lock().await;
+    let dir = test_config_dir("  server:\n    port: 0\n  management:\n    port: 0\n");
+    let env = HashMap::from([
+        ("OXIDE_MANAGEMENT_ENDPOINTS_EXPOSURE".to_string(), "health,info,prometheus".to_string()),
+        // Sample fast so the test does not wait out the 2s default.
+        ("OXIDE_METRICS_PROCESS_INTERVAL_MILLIS".to_string(), "100".to_string()),
+    ]);
+    let app = OxideApplication::builder().base_dir(dir.path()).env(env).start().await.unwrap();
+    let mgmt = app.context().get::<ManagementServer>().unwrap().local_addr().unwrap();
+
+    // The sampler primes once at post_construct, so one interval is enough.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let scrape = reqwest::get(format!("http://{mgmt}/actuator/prometheus")).await.unwrap().text().await.unwrap();
+
+    for metric in ["process_resident_memory_bytes", "process_virtual_memory_bytes", "process_cpu_seconds_total"] {
+        assert!(scrape.contains(metric), "{metric} missing from scrape: {scrape}");
+    }
+
+    // Not just present: a running process has a non-zero RSS, so a zero here
+    // would mean the gauge is registered but never actually filled in.
+    let rss: f64 = scrape
+        .lines()
+        .find(|l| l.starts_with("process_resident_memory_bytes "))
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no process_resident_memory_bytes value in: {scrape}"));
+    assert!(rss > 0.0, "resident memory reported as {rss}");
+
+    app.stop().await.unwrap();
+}

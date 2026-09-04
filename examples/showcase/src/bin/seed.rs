@@ -44,6 +44,12 @@ fn note(i: usize) -> Note {
 struct Args {
     kafka: usize,
     mongo: usize,
+    /// Messages per second to keep producing, instead of a one-shot burst.
+    /// With `--for-seconds`, this models a topic that keeps receiving traffic
+    /// while the consumer is trying to catch up -- which is what a real
+    /// backlog looks like, and what a burst-then-idle seed cannot show.
+    rate: usize,
+    for_seconds: u64,
     brokers: String,
     mongo_uri: String,
     topic: String,
@@ -54,6 +60,8 @@ fn parse_args() -> Args {
     let mut a = Args {
         kafka: 0,
         mongo: 0,
+        rate: 0,
+        for_seconds: 0,
         brokers: "localhost:19092".to_string(),
         mongo_uri: "mongodb://localhost:37017".to_string(),
         topic: "notes-events".to_string(),
@@ -66,6 +74,8 @@ fn parse_args() -> Args {
         match argv[i].as_str() {
             "--kafka" => a.kafka = value().parse().expect("--kafka takes a number"),
             "--mongo" => a.mongo = value().parse().expect("--mongo takes a number"),
+            "--rate" => a.rate = value().parse().expect("--rate takes a number"),
+            "--for-seconds" => a.for_seconds = value().parse().expect("--for-seconds takes a number"),
             "--brokers" => a.brokers = value(),
             "--mongo-uri" => a.mongo_uri = value(),
             "--topic" => a.topic = value(),
@@ -179,15 +189,69 @@ async fn seed_mongo(a: &Args) {
     );
 }
 
+/// Produces at a steady rate for a fixed duration, reporting what it actually
+/// achieved. The achieved rate matters: if it falls short of the target the
+/// broker (or this machine) is the limit, and any consumer-lag number from the
+/// same run has to be read in that light.
+async fn produce_at_rate(a: &Args) {
+    if a.rate == 0 || a.for_seconds == 0 {
+        return;
+    }
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", &a.brokers)
+        .set("linger.ms", "20")
+        .set("batch.size", "1048576")
+        .set("compression.type", "lz4")
+        .set("acks", "1")
+        .set("queue.buffering.max.messages", "200000")
+        .create()
+        .expect("kafka producer");
+
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(a.for_seconds);
+    // One batch per 100ms rather than one message per 1/rate seconds: at a few
+    // thousand messages a second the per-message sleep would spend the whole
+    // budget in timer wakeups instead of producing.
+    let per_tick = (a.rate / 10).max(1);
+    let mut ticker = tokio::time::interval(Duration::from_millis(100));
+    let mut sent = 0usize;
+    let mut i = 1_000_000_000usize; // disjoint from the burst seed's ids
+    while Instant::now() < deadline {
+        ticker.tick().await;
+        for _ in 0..per_tick {
+            let n = note(i);
+            i += 1;
+            let payload = serde_json::to_string(&n).expect("serialize");
+            let record: FutureRecord<String, String> = FutureRecord::to(&a.topic).key(&n.id).payload(&payload);
+            // Drop on a full queue rather than blocking: this is background
+            // pressure, and stalling here would silently turn a rate test into
+            // a latency test.
+            if producer.send_result(record).is_ok() {
+                sent += 1;
+            }
+        }
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    eprintln!(
+        "[seed] steady producer: {sent} messages in {elapsed:.1}s ({:.0} msg/s, target {})",
+        sent as f64 / elapsed,
+        a.rate
+    );
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let a = parse_args();
-    eprintln!("[seed] kafka={} mongo={} brokers={} mongo-uri={}", a.kafka, a.mongo, a.brokers, a.mongo_uri);
-    tokio::time::timeout(Duration::from_secs(900), async {
+    eprintln!(
+        "[seed] kafka={} mongo={} rate={} for-seconds={} brokers={}",
+        a.kafka, a.mongo, a.rate, a.for_seconds, a.brokers
+    );
+    tokio::time::timeout(Duration::from_secs(1800), async {
         seed_mongo(&a).await;
         seed_kafka(&a).await;
+        produce_at_rate(&a).await;
     })
     .await
-    .expect("seeding timed out after 15 minutes");
+    .expect("seeding timed out after 30 minutes");
     eprintln!("[seed] done");
 }

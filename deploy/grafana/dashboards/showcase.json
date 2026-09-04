@@ -647,71 +647,13 @@
       }
     },
     {
-      "id": 10,
-      "title": "Process",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "oxide-prometheus"
-      },
-      "description": "Exported only if the Prometheus exporter is configured with process collectors; empty otherwise.",
-      "gridPos": {
-        "x": 12,
-        "y": 24,
-        "w": 12,
-        "h": 6
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "oxide-prometheus"
-          },
-          "expr": "process_resident_memory_bytes{service=\"showcase\"}",
-          "legendFormat": "RSS",
-          "refId": "A",
-          "editorMode": "code",
-          "range": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 8,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "mean",
-            "max"
-          ],
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
       "id": 103,
       "title": "Load generator (k6) \u2014 populated only while a run is in flight",
       "type": "row",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 30,
+        "y": 44,
         "w": 24,
         "h": 1
       },
@@ -728,7 +670,7 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 31,
+        "y": 45,
         "w": 6,
         "h": 6
       },
@@ -779,7 +721,7 @@
       "description": "Offered load against handled load. They diverge when the service starts shedding or the client starts queueing.",
       "gridPos": {
         "x": 6,
-        "y": 31,
+        "y": 45,
         "w": 9,
         "h": 6
       },
@@ -848,7 +790,7 @@
       "description": "k6 reports these in milliseconds; the service-side panel above is in seconds.",
       "gridPos": {
         "x": 15,
-        "y": 31,
+        "y": 45,
         "w": 9,
         "h": 6
       },
@@ -915,6 +857,396 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 104,
+      "title": "Resources \u2014 what this costs",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 20,
+      "title": "CPU",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "CPU seconds per second: 1.0 is one core fully busy. Exported by the service itself via oxide-observability, so any Oxide Boot app has this, not just this rig.",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "rate(process_cpu_seconds_total{service=\"showcase\"}[$__rate_interval])",
+          "legendFormat": "cores used",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Memory",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "Resident set is what a container limit has to cover; virtual size is mostly address space and looks alarming without being so.",
+      "gridPos": {
+        "x": 8,
+        "y": 31,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "process_resident_memory_bytes{service=\"showcase\"}",
+          "legendFormat": "resident (RSS)",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "process_virtual_memory_bytes{service=\"showcase\"}",
+          "legendFormat": "virtual",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "title": "Cost per request",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "CPU divided by throughput. Flat under rising load means linear scaling; a rise means something per-request is getting more expensive.",
+      "gridPos": {
+        "x": 16,
+        "y": 31,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "rate(process_cpu_seconds_total{service=\"showcase\"}[$__rate_interval]) / clamp_min(sum(rate(http_server_requests_seconds_count{service=\"showcase\"}[$__rate_interval])), 1e-9)",
+          "legendFormat": "CPU seconds per request",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "title": "Resident memory",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "process_resident_memory_bytes{service=\"showcase\"}",
+          "legendFormat": "RSS",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 24,
+      "title": "CPU cores",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "",
+      "gridPos": {
+        "x": 6,
+        "y": 38,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "rate(process_cpu_seconds_total{service=\"showcase\"}[$__rate_interval])",
+          "legendFormat": "cores",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 25,
+      "title": "Threads",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "Linux only: macOS exposes no portable thread count, so this stays empty there rather than showing a guess.",
+      "gridPos": {
+        "x": 12,
+        "y": 38,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "process_threads{service=\"showcase\"}",
+          "legendFormat": "threads",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 26,
+      "title": "Uptime",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "oxide-prometheus"
+      },
+      "description": "Resets on a restart, which is the quickest way to spot one mid-run.",
+      "gridPos": {
+        "x": 18,
+        "y": 38,
+        "w": 6,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "oxide-prometheus"
+          },
+          "expr": "time() - process_start_time_seconds{service=\"showcase\"}",
+          "legendFormat": "uptime",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "justifyMode": "auto"
       }
     }
   ]
