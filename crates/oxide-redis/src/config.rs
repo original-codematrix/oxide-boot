@@ -4,6 +4,7 @@ use crate::{Error, Result};
 use oxide_core::{ComponentDescriptor, Context};
 use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
@@ -283,6 +284,202 @@ impl RedisTemplate {
         let mut conn = self.raw().await?;
         let key = self.key(key);
         self.timed(async move { conn.expire::<_, bool>(&key, ttl.as_secs().max(1) as i64).await }).await
+    }
+
+    // ---------------------------------------------------------------
+    // Hashes -- `opsForHash` in Spring's RedisTemplate.
+    //
+    // A hash is how a record-shaped value belongs in Redis: one key, one
+    // field per attribute, and a single field readable or writable without
+    // fetching and re-serialising the whole thing.
+    // ---------------------------------------------------------------
+
+    /// `HSET key field value`. Returns whether the field was new.
+    pub async fn hset(&self, key: &str, field: &str, value: &str) -> Result<bool> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let (field, value) = (field.to_string(), value.to_string());
+        let added: i64 = self.timed(async move { conn.hset::<_, _, _, i64>(&key, field, value).await }).await?;
+        Ok(added > 0)
+    }
+
+    /// `HSET key f1 v1 f2 v2 ...` -- one round trip for the whole record.
+    pub async fn hset_all(&self, key: &str, fields: &[(&str, &str)]) -> Result<()> {
+        if fields.is_empty() {
+            // HSET with no field/value pair is a protocol error, and writing
+            // nothing has an obvious answer that needs no server.
+            return Ok(());
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let items: Vec<(String, String)> = fields.iter().map(|(f, v)| ((*f).to_string(), (*v).to_string())).collect();
+        self.timed(async move { conn.hset_multiple::<_, _, _, ()>(&key, &items).await }).await
+    }
+
+    /// `HGET key field`.
+    pub async fn hget(&self, key: &str, field: &str) -> Result<Option<String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let field = field.to_string();
+        self.timed(async move { conn.hget::<_, _, Option<String>>(&key, field).await }).await
+    }
+
+    /// `HGETALL key`. An empty map means the key does not exist -- Redis
+    /// does not distinguish "missing hash" from "empty hash".
+    pub async fn hgetall(&self, key: &str) -> Result<HashMap<String, String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.hgetall::<_, HashMap<String, String>>(&key).await }).await
+    }
+
+    /// `HDEL key field...`. Returns how many fields were removed.
+    pub async fn hdel(&self, key: &str, fields: &[&str]) -> Result<u64> {
+        if fields.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let fields: Vec<String> = fields.iter().map(|f| (*f).to_string()).collect();
+        self.timed(async move { conn.hdel::<_, _, u64>(&key, fields).await }).await
+    }
+
+    /// `HEXISTS key field`.
+    pub async fn hexists(&self, key: &str, field: &str) -> Result<bool> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let field = field.to_string();
+        self.timed(async move { conn.hexists::<_, _, bool>(&key, field).await }).await
+    }
+
+    /// `HINCRBY key field delta`, returning the new value.
+    pub async fn hincr(&self, key: &str, field: &str, delta: i64) -> Result<i64> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let field = field.to_string();
+        self.timed(async move { conn.hincr::<_, _, _, i64>(&key, field, delta).await }).await
+    }
+
+    // ---------------------------------------------------------------
+    // Lists -- `opsForList`.
+    // ---------------------------------------------------------------
+
+    /// `LPUSH key value...`, returning the list's new length.
+    pub async fn lpush(&self, key: &str, values: &[&str]) -> Result<u64> {
+        if values.is_empty() {
+            return self.llen(key).await;
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let values: Vec<String> = values.iter().map(|v| (*v).to_string()).collect();
+        self.timed(async move { conn.lpush::<_, _, u64>(&key, values).await }).await
+    }
+
+    /// `RPUSH key value...`, returning the list's new length.
+    pub async fn rpush(&self, key: &str, values: &[&str]) -> Result<u64> {
+        if values.is_empty() {
+            return self.llen(key).await;
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let values: Vec<String> = values.iter().map(|v| (*v).to_string()).collect();
+        self.timed(async move { conn.rpush::<_, _, u64>(&key, values).await }).await
+    }
+
+    /// `LPOP key`.
+    pub async fn lpop(&self, key: &str) -> Result<Option<String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.lpop::<_, Option<String>>(&key, None).await }).await
+    }
+
+    /// `RPOP key`.
+    pub async fn rpop(&self, key: &str) -> Result<Option<String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.rpop::<_, Option<String>>(&key, None).await }).await
+    }
+
+    /// `LLEN key`.
+    pub async fn llen(&self, key: &str) -> Result<u64> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.llen::<_, u64>(&key).await }).await
+    }
+
+    /// `LRANGE key start stop`. Indices are inclusive and may be negative,
+    /// as in Redis: `(0, -1)` is the whole list.
+    pub async fn lrange(&self, key: &str, start: isize, stop: isize) -> Result<Vec<String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.lrange::<_, Vec<String>>(&key, start, stop).await }).await
+    }
+
+    // ---------------------------------------------------------------
+    // Sets -- `opsForSet`.
+    // ---------------------------------------------------------------
+
+    /// `SADD key member...`, returning how many members were new.
+    pub async fn sadd(&self, key: &str, members: &[&str]) -> Result<u64> {
+        if members.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let members: Vec<String> = members.iter().map(|m| (*m).to_string()).collect();
+        self.timed(async move { conn.sadd::<_, _, u64>(&key, members).await }).await
+    }
+
+    /// `SREM key member...`, returning how many members were removed.
+    pub async fn srem(&self, key: &str, members: &[&str]) -> Result<u64> {
+        if members.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let members: Vec<String> = members.iter().map(|m| (*m).to_string()).collect();
+        self.timed(async move { conn.srem::<_, _, u64>(&key, members).await }).await
+    }
+
+    /// `SMEMBERS key`.
+    pub async fn smembers(&self, key: &str) -> Result<Vec<String>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.smembers::<_, Vec<String>>(&key).await }).await
+    }
+
+    /// `SISMEMBER key member`.
+    pub async fn sismember(&self, key: &str, member: &str) -> Result<bool> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let member = member.to_string();
+        self.timed(async move { conn.sismember::<_, _, bool>(&key, member).await }).await
+    }
+
+    /// `SCARD key`.
+    pub async fn scard(&self, key: &str) -> Result<u64> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.scard::<_, u64>(&key).await }).await
+    }
+
+    // ---------------------------------------------------------------
+    // Key lifetime
+    // ---------------------------------------------------------------
+
+    /// `TTL key`. `None` when the key has no expiry or does not exist --
+    /// Redis reports -1 and -2 for those, which are not durations.
+    pub async fn ttl(&self, key: &str) -> Result<Option<Duration>> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        let secs: i64 = self.timed(async move { conn.ttl::<_, i64>(&key).await }).await?;
+        Ok(if secs >= 0 { Some(Duration::from_secs(secs as u64)) } else { None })
+    }
+
+    /// `PERSIST key` -- removes the expiry. Returns whether there was one.
+    pub async fn persist(&self, key: &str) -> Result<bool> {
+        let mut conn = self.raw().await?;
+        let key = self.key(key);
+        self.timed(async move { conn.persist::<_, bool>(&key).await }).await
     }
 
     /// `PING` (used by the health indicator).

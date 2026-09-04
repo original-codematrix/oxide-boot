@@ -10,10 +10,14 @@
 //! Dragonfly speaks the Redis wire protocol, so it is a drop-in server here;
 //! the integration tests run against it.
 
+pub mod cache;
 pub mod config;
 mod health;
+pub mod repository;
 
+pub use cache::RedisCache;
 pub use config::{RedisProps, RedisTemplate};
+pub use repository::{RedisEntity, RedisRepository};
 
 /// Errors produced by the Redis starter.
 #[derive(Debug, thiserror::Error)]
@@ -34,6 +38,8 @@ pub enum Error {
     NotStarted,
     #[error("redis is unavailable; the last connection attempt failed and the retry cooldown has not elapsed")]
     Unavailable,
+    #[error("entity id '{id}' contains ':', which is the key separator and would collide with other ids")]
+    InvalidId { id: String },
 }
 
 /// Result alias for the Redis starter.

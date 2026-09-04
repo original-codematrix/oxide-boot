@@ -296,7 +296,14 @@ async fn poison_pill_skips_retry_and_goes_straight_to_dlt() {
     harness::reset_topic("retry-poison", 1).await;
     harness::reset_topic("retry-poison.DLT", 1).await;
     let group = harness::unique_topic("retry-poison-g");
-    let (_dir, app) = boot(&group, 3, 5000).await;
+    // 30s backoff, not 5s. The timing assertion below separates "went
+    // straight to the DLT" from "waited out a retry loop", and the elapsed
+    // time it measures starts at produce -- so it also contains broker and
+    // consumer-group startup, which under a loaded full-suite run reached
+    // 15s and tripped a 3s threshold. Widening the configured backoff is
+    // what makes the two cases distinguishable regardless of that jitter:
+    // a genuine retry now takes 60s or more.
+    let (_dir, app) = boot(&group, 3, 30_000).await;
     let producer = app.context().get::<oxide_kafka::KafkaProducer>().expect("producer");
 
     let started = Instant::now();
@@ -305,14 +312,14 @@ async fn poison_pill_skips_retry_and_goes_straight_to_dlt() {
         .await
         .expect("produce malformed payload");
 
-    let record = wait_for_first_record("retry-poison.DLT", started, Duration::from_secs(20)).await;
+    let record = wait_for_first_record("retry-poison.DLT", started, Duration::from_secs(45)).await;
     let (payload_bytes, headers, elapsed) =
         record.expect("malformed payload must reach the DLT (no retry loop to wait out)");
 
     assert!(
-        elapsed < Duration::from_secs(3),
+        elapsed < Duration::from_secs(25),
         "poison pill reached the DLT after {elapsed:?}; a genuine retry \
-         (backoff_initial_ms=5000, max_attempts=3) would take at least ~15s, \
+         (backoff_initial_ms=30000, max_attempts=3) would take at least ~60s, \
          so this proves the retry loop was skipped entirely"
     );
     assert_eq!(

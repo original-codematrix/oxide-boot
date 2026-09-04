@@ -2172,6 +2172,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-cache"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+ "metrics",
+ "oxide-boot",
+ "oxide-cache-macros",
+ "oxide-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "oxide-cache-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "oxide-client"
 version = "0.1.0"
 dependencies = [
@@ -2355,7 +2381,9 @@ dependencies = [
  "inventory",
  "metrics",
  "oxide-boot",
+ "oxide-cache",
  "oxide-core",
+ "oxide-redis-test",
  "oxide-test",
  "oxide-web",
  "redis",

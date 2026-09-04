@@ -733,7 +733,10 @@ so no extra quoting is needed for the common case.
 | Spring-Kafka consumer lag | `kafka_consumer_lag{topic, partition, group}` |
 | `@Repository` + Spring Data derived queries | `#[mongo_repository]` + `#[derive(Document)]` |
 | `MongoTemplate` | `MongoClient` (injectable, `collection::<T>(name)`) |
-| `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (injectable; `get_many`, `pipeline`) |
+| `RedisTemplate` / `StringRedisTemplate` | `RedisTemplate` (strings, hashes, lists, sets, TTL, `pipeline`) |
+| `@RedisHash` + `CrudRepository` | `RedisRepository<T>` + `RedisEntity` |
+| `@Cacheable` | `#[cacheable(cache = "notes", key = "id")]` |
+| `CacheManager` / `opsForValue` | `CacheManager::get("name")` → raw or typed access |
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient` | `#[http_client]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |
@@ -758,7 +761,7 @@ not, and the gap is worth knowing before betting on this:
 | `spring-boot-starter-validation` | — | ❌ no `@Valid` / Bean Validation |
 | `spring-boot-starter-security` | — | ❌ no authn/authz at all |
 | `spring-boot-starter-data-jpa` / JDBC | — | ❌ no SQL support |
-| `spring-boot-starter-cache` (`@Cacheable`) | — | ❌ caching is manual; `oxide-redis` is the substrate for it |
+| `spring-boot-starter-cache` (`@Cacheable`) | `oxide-cache` | ✅ named caches, in-memory + Redis backends |
 | `@Scheduled` / `spring-boot-starter-quartz` | — | ❌ no scheduler |
 | `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
 
