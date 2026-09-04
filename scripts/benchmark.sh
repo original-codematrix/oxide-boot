@@ -290,6 +290,7 @@ elif [[ "$K6_IN_NETWORK" == "1" ]]; then
     -e K6_PROMETHEUS_RW_PUSH_INTERVAL="10s" \
     grafana/k6:latest run -o experimental-prometheus-rw \
       --summary-export /out/summary.json \
+      --summary-trend-stats="avg,min,med,p(90),p(95),p(99),max" \
       /scripts/loadtest-showcase.js "$@" 2>&1 | tee "$OUT/k6.log" || true
 else
 BASE_URL="http://127.0.0.1:${APP_PORT}" \
@@ -300,6 +301,7 @@ K6_PROMETHEUS_RW_TREND_STATS="p(50),p(95),p(99)" \
 K6_PROMETHEUS_RW_PUSH_INTERVAL="10s" \
   k6 run -o experimental-prometheus-rw \
     --summary-export "$OUT/summary.json" \
+    --summary-trend-stats="avg,min,med,p(90),p(95),p(99),max" \
     "$ROOT/scripts/loadtest-showcase.js" "$@" 2>&1 | tee "$OUT/k6.log" || true
 fi
 
@@ -330,7 +332,19 @@ def g(name, key, scale=1.0):
     return f"{v*scale:.1f}" if isinstance(v, (int, float)) else "n/a"
 print(f"  HTTP requests/s .............. {g('http_reqs','rate')}")
 print(f"  HTTP p50 / p95 / p99 (ms) ... {g('http_req_duration','med')} / {g('http_req_duration','p(95)')} / {g('http_req_duration','p(99)')}")
-print(f"  HTTP failure rate ............ {g('http_req_failed','rate',100)}%")
+print(f"  HTTP max latency (ms) ........ {g('http_req_duration','max')}")
+# k6 exports rate metrics as passes/fails/value, not `rate`; asking for
+# `rate` silently yielded "n/a%" and hid the error rate entirely.
+def ratio(name):
+    d = m.get(name, {})
+    p, f = d.get("passes", 0) or 0, d.get("fails", 0) or 0
+    return f"{100.0*p/(p+f):.3f}" if (p + f) else "n/a"
+_failed = m.get("http_req_failed", {})
+_fp, _ff = _failed.get("passes", 0) or 0, _failed.get("fails", 0) or 0
+print(f"  HTTP failure rate ............ {ratio('http_req_failed')}%  ({_fp:.0f} of {_fp+_ff:.0f} requests)")
+_c = m.get("checks", {})
+_cp, _cf = _c.get("passes", 0) or 0, _c.get("fails", 0) or 0
+print(f"  Checks passed ................ {ratio('checks')}%  ({_cp:.0f} of {_cp+_cf:.0f})")
 print(f"  Iterations/s ................. {g('iterations','rate')}")
 PY
 # Whether the consume rate is a capacity measurement depends on one thing

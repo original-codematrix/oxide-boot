@@ -1,7 +1,7 @@
 # Local CI entry point. Requires: rustup (stable), Docker (container tests),
 # `cargo install cargo-audit cargo-deny --locked`.
 
-.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark capacity floor stack stack-down
+.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark capacity saturation floor stack stack-down
 
 fmt:
 	cargo fmt --all -- --check
@@ -54,6 +54,11 @@ benchmark:
 # cost, so the isolated and combined figures are comparable.
 capacity:
 	./scripts/capacity.sh
+
+# Ramps concurrency until throughput stops rising, so the reported numbers are
+# a limit rather than whatever the load generator happened to ask for.
+saturation:
+	./scripts/saturation.sh
 
 # The framework's HTTP ceiling with no backing services in the path. Read every
 # other number against this one.
