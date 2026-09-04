@@ -104,6 +104,8 @@ pub enum WebError {
         "controller '{type_name}' (route '{path}') is not registered as a component — add #[component] to the struct"
     )]
     ControllerNotRegistered { type_name: &'static str, path: &'static str },
+    #[error("TLS is enabled but could not be started: {message}")]
+    Tls { message: String },
     #[error("duplicate route registered: {method} {path}")]
     DuplicateRoute { method: &'static str, path: &'static str },
     #[error("route '{path}' is reserved: '/actuator' is reserved for the framework's own endpoints")]

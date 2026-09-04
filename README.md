@@ -744,6 +744,9 @@ so no extra quoting is needed for the common case.
 | Beans of one interface as `List<T>` | `ctx.get_all::<dyn T>()` via `#[component(provides(T))]` |
 | Micrometer meter pre-registration | `MetricRegistration::counter(...)` |
 | `management.metrics.distribution.*` | `oxide.metrics.http.{enabled,histogram,buckets}` |
+| `server.ssl.*` | `oxide.server.ssl.{enabled,certificate,private-key}` (PEM) |
+| `spring.kafka.properties.*` | `oxide.kafka.properties.*` (SASL, SCRAM, SSL — passthrough) |
+| `spring.data.redis.url` with TLS | `rediss://user:pass@host` |
 
 ### Starter coverage
 

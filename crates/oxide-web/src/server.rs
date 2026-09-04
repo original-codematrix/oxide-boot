@@ -50,6 +50,41 @@ pub struct ServerProps {
     pub cors: crate::hardening::CorsProps,
     #[serde(rename = "shutdown", default)]
     pub shutdown: ShutdownProps,
+    /// TLS, under `oxide.server.ssl` -- the same path Spring Boot uses.
+    #[serde(rename = "ssl", default)]
+    pub ssl: SslProps,
+}
+
+/// TLS for the HTTP server.
+///
+/// Mirrors Spring's `server.ssl.*`, minus the Java keystore formats: PEM is
+/// what every certificate tool and every Kubernetes TLS secret already
+/// produces, so a JKS/PKCS12 loader would be a conversion step for nobody's
+/// benefit.
+///
+/// ```yaml
+/// oxide:
+///   server:
+///     ssl:
+///       enabled: true
+///       certificate: /etc/tls/tls.crt        # PEM, leaf first, chain after
+///       private-key: /etc/tls/tls.key        # PEM, PKCS#8 or PKCS#1
+/// ```
+///
+/// Terminating TLS at the pod is not always right -- an ingress or a service
+/// mesh often does it -- which is why this is off by default rather than
+/// self-signing something at boot.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SslProps {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to the certificate chain, PEM.
+    #[serde(default)]
+    pub certificate: Option<String>,
+    /// Path to the private key, PEM (PKCS#8 or PKCS#1).
+    #[serde(default)]
+    pub private_key: Option<String>,
 }
 
 impl Default for ServerProps {
@@ -62,6 +97,7 @@ impl Default for ServerProps {
             max_body_bytes: default_max_body_bytes(),
             cors: crate::hardening::CorsProps::default(),
             shutdown: ShutdownProps::default(),
+            ssl: SslProps::default(),
         }
     }
 }
@@ -122,7 +158,9 @@ impl WebServer {
 
     async fn start(&self, ctx: &Context) -> ComponentResult<()> {
         let router = crate::routing::build_router(ctx)?;
-        self.serving.start(&self.props.address, self.props.port, "HTTP server", router).await?;
+        self.serving
+            .start_with_tls(&self.props.address, self.props.port, "HTTP server", router, &self.props.ssl)
+            .await?;
         self.readiness.store(true, Ordering::SeqCst);
         Ok(())
     }

@@ -11,6 +11,8 @@ oxide-core.workspace = true
 oxide-boot.workspace = true
 oxide-web-macros.workspace = true
 axum.workspace = true
+axum-server.workspace = true
+rustls.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,7 +24,10 @@ tower.workspace = true
 tower-http.workspace = true
 
 [dev-dependencies]
-reqwest.workspace = true
+# Generates the test certificate in-process: a committed one expires, and
+# the day it does the failure looks like a TLS bug.
+rcgen = "0.14"
+reqwest = { workspace = true, features = ["rustls", "json"] }
 tempfile.workspace = true
 trybuild.workspace = true
 inventory.workspace = true

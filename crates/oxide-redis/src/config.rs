@@ -488,6 +488,17 @@ impl RedisTemplate {
         self.timed(async move { redis::cmd("PING").query_async::<()>(&mut conn).await }).await
     }
 
+    /// Builds a template from properties, without going through the DI
+    /// container. Public because an application occasionally needs a second
+    /// connection -- a different database index, or a replica for reads --
+    /// and because tests need one without booting.
+    ///
+    /// The connection is established on first use, as with the injected
+    /// template.
+    pub fn from_props(props: &RedisProps) -> Self {
+        Self::new(props)
+    }
+
     fn new(props: &RedisProps) -> Self {
         Self {
             url: props.url.clone(),

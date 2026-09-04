@@ -46,25 +46,64 @@ impl HttpServing {
         name: &'static str,
         router: axum::Router,
     ) -> ComponentResult<SocketAddr> {
+        self.start_with_tls(address, port, name, router, &crate::server::SslProps::default()).await
+    }
+
+    /// As [`start`](Self::start), serving over TLS when `ssl.enabled`.
+    pub(crate) async fn start_with_tls(
+        &self,
+        address: &str,
+        port: u16,
+        name: &'static str,
+        router: axum::Router,
+        ssl: &crate::server::SslProps,
+    ) -> ComponentResult<SocketAddr> {
+        // Bind first in both cases, so a port conflict is reported the same
+        // way with and without TLS, and so port 0 resolves before the
+        // acceptor is built.
         let listener = tokio::net::TcpListener::bind((address, port))
             .await
             .map_err(|source| crate::WebError::Bind { port, source })?;
         let local_addr = listener.local_addr().map_err(|source| crate::WebError::Bind { port, source })?;
         let (tx, rx) = oneshot::channel::<()>();
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = rx.await;
-                })
-                .await
-        });
+
+        let handle = if ssl.enabled {
+            let config = load_tls_config(ssl).await?;
+            let std_listener = listener.into_std().map_err(|source| crate::WebError::Bind { port, source })?;
+            // `axum_server` owns its own graceful shutdown; the oneshot is
+            // translated into its handle so both paths stop the same way.
+            let server_handle = axum_server::Handle::new();
+            let shutdown_handle = server_handle.clone();
+            tokio::spawn(async move {
+                let _ = rx.await;
+                // `None`, not a duration: `stop` already bounds the drain by
+                // timing out the join handle and aborting. Giving axum_server
+                // its own deadline as well would mean two grace periods that
+                // could disagree, and the shorter one would win silently.
+                shutdown_handle.graceful_shutdown(None);
+            });
+            tokio::spawn(async move {
+                axum_server::from_tcp_rustls(std_listener, config)
+                    .handle(server_handle)
+                    .serve(router.into_make_service())
+                    .await
+            })
+        } else {
+            tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(async move {
+                        let _ = rx.await;
+                    })
+                    .await
+            })
+        };
         {
             let mut rt = self.runtime.lock().await;
             rt.shutdown = Some(tx);
             rt.handle = Some(handle);
         }
         *self.addr.lock().unwrap_or_else(|p| p.into_inner()) = Some(local_addr);
-        tracing::info!(server = name, port = local_addr.port(), "listening");
+        tracing::info!(server = name, port = local_addr.port(), tls = ssl.enabled, "listening");
         Ok(local_addr)
     }
 
@@ -95,4 +134,31 @@ impl HttpServing {
         }
         Ok(())
     }
+}
+
+/// Reads the PEM certificate chain and private key named in `ssl`.
+///
+/// Both paths are required when TLS is on: a server that silently started
+/// without encryption because a path was missing is the worst possible
+/// failure mode, so this is an error rather than a fallback to plaintext.
+async fn load_tls_config(
+    ssl: &crate::server::SslProps,
+) -> Result<axum_server::tls_rustls::RustlsConfig, crate::WebError> {
+    let cert = ssl.certificate.as_deref().ok_or_else(|| crate::WebError::Tls {
+        message: "oxide.server.ssl.enabled is true but no `certificate` path is configured".to_string(),
+    })?;
+    let key = ssl.private_key.as_deref().ok_or_else(|| crate::WebError::Tls {
+        message: "oxide.server.ssl.enabled is true but no `private-key` path is configured".to_string(),
+    })?;
+
+    // Installed once per process; a second call is a no-op. Without a
+    // provider, rustls panics at handshake time rather than at startup --
+    // which would turn a configuration problem into a runtime one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await.map_err(|source| crate::WebError::Tls {
+        // The paths are named because "invalid certificate" without them is
+        // unactionable when several are mounted.
+        message: format!("failed to load TLS material (certificate: {cert}, private-key: {key}): {source}"),
+    })
 }

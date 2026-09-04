@@ -65,6 +65,10 @@ testcontainers = "0.28"
 axum = "0.8"
 mongodb = "3.8"
 tower = "0.5"
+# TLS for the HTTP server. rustls, not OpenSSL: no system dependency, so the
+# container image stays slim and the build stays reproducible.
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tower-http = { version = "0.7", features = ["timeout", "limit", "cors"] }
 serde_json = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
@@ -82,7 +86,16 @@ quote = "1"
 proc-macro2 = "1"
 trybuild = "1"
 tempfile = "3"
-redis = { version = "1", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
+# `tls-rustls` (not native-tls): rustls needs no system OpenSSL, which keeps
+# the container image slim and the build reproducible. Enables `rediss://`.
+redis = { version = "1", default-features = false, features = [
+    "tokio-comp",
+    "connection-manager",
+    "script",
+    "tls-rustls",
+    "tokio-rustls-comp",
+    "tls-rustls-webpki-roots",
+] }
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
