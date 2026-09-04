@@ -7,7 +7,7 @@ pub mod container;
 pub use config::{AppConfig, ConfigDefaults, ConfigError};
 pub use container::{
     ComponentDescriptor, ComponentResult, Context, ContextBuilder, ContextError, HookFn, Inject, TraitBinding,
-    assemble, assemble_with_bindings,
+    assemble, assemble_with_bindings, assemble_with_overrides,
 };
 
 // Re-exported so `oxide-macros`-generated code (which only depends on

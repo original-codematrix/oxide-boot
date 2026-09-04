@@ -414,6 +414,23 @@ pub fn assemble(
     descriptors: Vec<&'static ComponentDescriptor>,
     seed: ContextBuilder,
 ) -> Result<(Context, Vec<&'static ComponentDescriptor>), ContextError> {
+    assemble_with_overrides(descriptors, seed, &[])
+}
+
+/// [`assemble`], skipping the descriptors whose type appears in
+/// `overridden`.
+///
+/// Skipping rather than constructing-then-replacing is deliberate: a
+/// component whose construction has side effects -- opening a connection,
+/// spawning a task -- must not run at all when it is being replaced, and its
+/// lifecycle hooks must not run either. A replaced Kafka listener that still
+/// subscribed would make the replacement pointless.
+pub fn assemble_with_overrides(
+    descriptors: Vec<&'static ComponentDescriptor>,
+    seed: ContextBuilder,
+    overridden: &[TypeId],
+) -> Result<(Context, Vec<&'static ComponentDescriptor>), ContextError> {
+    let descriptors = descriptors.into_iter().filter(|d| !overridden.contains(&(d.type_id)())).collect::<Vec<_>>();
     assemble_with_bindings(descriptors, seed, inventory::iter::<TraitBinding>.into_iter().collect())
 }
 

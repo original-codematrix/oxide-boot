@@ -134,11 +134,16 @@ pub fn expand(args: proc_macro2::TokenStream, item: proc_macro2::TokenStream) ->
 }
 
 fn arg_idents(sig: &Signature) -> Vec<syn::Ident> {
+    typed_args(sig).into_iter().map(|(ident, _)| ident).collect()
+}
+
+/// The method's parameters as `(name, type)`, `self` excluded.
+fn typed_args(sig: &Signature) -> Vec<(syn::Ident, syn::Type)> {
     sig.inputs
         .iter()
         .filter_map(|a| {
             if let FnArg::Typed(pt) = a {
-                if let syn::Pat::Ident(id) = &*pt.pat { Some(id.ident.clone()) } else { None }
+                if let syn::Pat::Ident(id) = &*pt.pat { Some((id.ident.clone(), (*pt.ty).clone())) } else { None }
             } else {
                 None
             }
@@ -146,8 +151,27 @@ fn arg_idents(sig: &Signature) -> Vec<syn::Ident> {
         .collect()
 }
 
+/// The trailing `Page` parameter, if the method declares one.
+///
+/// Matched on the last path segment, so `Page`, `oxide_mongo::Page` and an
+/// aliased import all work. It must be *last*: the remaining parameters are
+/// bound positionally to the conditions parsed out of the method name, and a
+/// `Page` in the middle would shift them.
+fn page_arg(sig: &Signature) -> Option<syn::Ident> {
+    let args = typed_args(sig);
+    let (ident, ty) = args.last()?;
+    let syn::Type::Path(path) = ty else { return None };
+    if path.path.segments.last()?.ident == "Page" { Some(ident.clone()) } else { None }
+}
+
 fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStream> {
-    let args = arg_idents(sig);
+    let page = page_arg(sig);
+    let mut args = arg_idents(sig);
+    // The page is not a condition value; leaving it in would bind it to the
+    // last field in the method name.
+    if page.is_some() {
+        args.pop();
+    }
 
     // CRUD helpers (id is `_id`).
     match method_name {
@@ -158,9 +182,14 @@ fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStr
             );
         }
         "find_all" => {
-            return ok(
-                quote! { ::oxide_mongo::__private::find_all(self.collection(), ::oxide_mongo::__private::doc!{}).await },
-            );
+            return match &page {
+                Some(page) => ok(quote! {
+                    ::oxide_mongo::__private::find_page(self.collection(), ::oxide_mongo::__private::doc!{}, &#page).await
+                }),
+                None => ok(
+                    quote! { ::oxide_mongo::__private::find_all(self.collection(), ::oxide_mongo::__private::doc!{}).await },
+                ),
+            };
         }
         "count" | "count_all" => {
             return ok(
@@ -217,15 +246,29 @@ fn expand_derived_or_crud(method_name: &str, sig: &Signature) -> Result<TokenStr
                 ::oxide_mongo::__private::find_one(self.collection(),
                     ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*])).await
             }),
-            FindKind::Many => ok(quote! {
+            FindKind::Many => match &page {
+                Some(page) => ok(quote! {
+                    ::oxide_mongo::__private::find_page(self.collection(),
+                        ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*]),
+                        &#page).await
+                }),
+                None => ok(quote! {
+                    ::oxide_mongo::__private::find_all(self.collection(),
+                        ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*])).await
+                }),
+            },
+        },
+        "find_all" => match &page {
+            Some(page) => ok(quote! {
+                ::oxide_mongo::__private::find_page(self.collection(),
+                    ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*]),
+                    &#page).await
+            }),
+            None => ok(quote! {
                 ::oxide_mongo::__private::find_all(self.collection(),
                     ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*])).await
             }),
         },
-        "find_all" => ok(quote! {
-            ::oxide_mongo::__private::find_all(self.collection(),
-                ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*])).await
-        }),
         "count" => ok(quote! {
             ::oxide_mongo::__private::count(self.collection(),
                 ::oxide_mongo::__private::derived_filter(&[#(#pairs),*], vec![#(#bson_args),*])).await

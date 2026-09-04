@@ -740,6 +740,8 @@ so no extra quoting is needed for the common case.
 | `spring.data.redis.url` | `oxide.redis.url` |
 | `@FeignClient` | `#[http_client]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |
+| `@MockBean` | `TestApp::builder().replace(mock)` |
+| `Pageable` / `Sort` | `Page::of(index, size).sorted_by(doc! { ... })` as the last parameter |
 | `@DataMongoTest` / `@DataRedisTest` / `@EmbeddedKafka` | `MongoTest::start()` / `RedisTest::start()` / `KafkaTest::start()` |
 | Beans of one interface as `List<T>` | `ctx.get_all::<dyn T>()` via `#[component(provides(T))]` |
 | `@Configuration` + `@Bean` | `#[configuration]` on an impl, `#[bean]` on factory methods |
@@ -760,7 +762,7 @@ not, and the gap is worth knowing before betting on this:
 |---|---|---|
 | `spring-boot-starter-web` | `oxide-web` | ✅ |
 | `spring-boot-starter-actuator` | `oxide-web` + `oxide-observability` | ✅ |
-| `spring-boot-starter-data-mongodb` | `oxide-mongo` | ✅ derived queries, no pagination |
+| `spring-boot-starter-data-mongodb` | `oxide-mongo` | ✅ derived queries with paging and sorting |
 | `spring-kafka` | `oxide-kafka` | ✅ listeners, retry, DLT, rebalance-safe |
 | `spring-boot-starter-data-redis` | `oxide-redis` | ✅ template + health |
 | `spring-boot-starter-test` | `oxide-test` | ✅ boot harness, containers |
@@ -772,9 +774,10 @@ not, and the gap is worth knowing before betting on this:
 | `@Scheduled` / `spring-boot-starter-quartz` | — | ❌ no scheduler |
 | `spring-boot-starter-amqp`, `mail`, `batch`, `graphql`, `websocket` | — | ❌ |
 
-Also missing from the DI container itself: `@Import`-style explicit
-configuration classes, `@MockBean`-style replacement in tests, and pagination
-in derived queries.
+Still missing from the DI container: `@Import`-style explicit configuration
+classes. In practice `inventory` already registers everything that is linked
+in, so the case `@Import` solves — pulling in a configuration that would
+otherwise not be scanned — mostly does not arise here.
 
 Resolution is no longer type-only. `#[configuration]` marks an impl block
 whose `#[bean]` methods are factories — which is how a type the application

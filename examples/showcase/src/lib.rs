@@ -29,10 +29,9 @@ use oxide_observability as _;
 use oxide_redis as _;
 
 use axum::extract::{Json, Path, Query};
-use futures::TryStreamExt;
 use oxide_boot::component;
 use oxide_kafka::{KafkaProducer, kafka_listeners};
-use oxide_mongo::{Document, MongoClient};
+use oxide_mongo::Document;
 use oxide_redis::RedisTemplate;
 use oxide_web::{ApiError, controller};
 use serde::{Deserialize, Serialize};
@@ -115,10 +114,14 @@ pub struct ByTag {
 #[oxide_mongo::mongo_repository(document = Note)]
 pub trait NoteRepository {
     async fn find_by_id(&self, id: String) -> oxide_mongo::Result<Option<Note>>;
-    async fn find_all(&self) -> oxide_mongo::Result<Vec<Note>>;
+    // Takes a `Page`, which is what makes the macro apply a limit. The
+    // method name is the query, so a `find_all_paged` alongside an unpaged
+    // `find_all` is not expressible -- and this example only wants the
+    // bounded one.
+    async fn find_all(&self, page: oxide_mongo::Page) -> oxide_mongo::Result<Vec<Note>>;
     async fn save(&self, note: &Note) -> oxide_mongo::Result<()>;
     async fn count(&self) -> oxide_mongo::Result<u64>;
-    async fn find_all_by_tag(&self, tag: String) -> oxide_mongo::Result<Vec<Note>>;
+    async fn find_all_by_tag(&self, tag: String, page: oxide_mongo::Page) -> oxide_mongo::Result<Vec<Note>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,9 +134,6 @@ pub trait NoteRepository {
 pub struct NoteService {
     repo: NoteRepositoryImpl,
     cache: RedisTemplate,
-    /// Used only by `list`, which needs a `limit` the derived-query surface
-    /// cannot express -- see the comment there.
-    mongo: MongoClient,
 }
 
 impl NoteService {
@@ -198,28 +198,17 @@ impl NoteService {
 
     /// Lists at most `PAGE_SIZE` notes.
     ///
-    /// This deliberately does *not* use `repo.find_all_by_tag`. Derived
-    /// queries have no `limit`/`skip`/`sort` -- pagination is a known gap --
-    /// so `find_all_by_tag` returns the entire matching set. The first
-    /// benchmark run made the cost obvious: against a 20k-document corpus it
-    /// serialised ~6.7k notes per request, and the run measured JSON encoding
-    /// rather than anything about the framework. Until derived pagination
-    /// exists, the driver escape hatch is the honest way to write this.
+    /// This used to reach past the repository to the driver, because derived
+    /// queries had no `limit`. They do now, so the escape hatch is gone and
+    /// the cap is expressed where the query is.
     pub async fn list(&self, tag: Option<String>) -> Result<Vec<Note>, ApiError> {
-        let filter = match &tag {
-            Some(tag) => mongodb::bson::doc! { "tag": tag },
-            None => mongodb::bson::doc! {},
+        let page = oxide_mongo::Page::first(PAGE_SIZE);
+        let result = match tag {
+            Some(tag) => self.repo.find_all_by_tag(tag, page).await,
+            None => self.repo.find_all(page).await,
         };
-        let collection = self.mongo.collection::<Note>("notes").map_err(|e| {
-            tracing::error!(error = %e, "mongo collection handle failed");
-            ApiError::internal_server_error().with_detail("failed to list notes")
-        })?;
-        let cursor = collection.find(filter).limit(PAGE_SIZE).await.map_err(|e| {
+        result.map_err(|e| {
             tracing::error!(error = %e, "mongo list failed");
-            ApiError::internal_server_error().with_detail("failed to list notes")
-        })?;
-        cursor.try_collect::<Vec<Note>>().await.map_err(|e| {
-            tracing::error!(error = %e, "mongo cursor failed");
             ApiError::internal_server_error().with_detail("failed to list notes")
         })
     }

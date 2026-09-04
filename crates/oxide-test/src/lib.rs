@@ -21,7 +21,7 @@ pub struct TestApp;
 
 impl TestApp {
     pub fn builder() -> TestAppBuilder {
-        TestAppBuilder { base_dir: PathBuf::from("."), env: HashMap::new() }
+        TestAppBuilder { base_dir: PathBuf::from("."), env: HashMap::new(), overrides: Vec::new() }
     }
 }
 
@@ -29,6 +29,9 @@ impl TestApp {
 pub struct TestAppBuilder {
     base_dir: PathBuf,
     env: HashMap<String, String>,
+    /// Applied to the underlying `AppBuilder` in registration order. Boxed
+    /// because each closure captures a different concrete type.
+    overrides: Vec<Box<dyn FnOnce(oxide_boot::AppBuilder) -> oxide_boot::AppBuilder + Send>>,
 }
 
 impl TestAppBuilder {
@@ -53,6 +56,21 @@ impl TestAppBuilder {
         self
     }
 
+    /// Supplies `instance` in place of the component the container would
+    /// have built for `T` — the `@MockBean` equivalent.
+    ///
+    /// The real component is not constructed at all, so a replaced Kafka
+    /// listener does not subscribe and a replaced client opens no
+    /// connection. Everything that depends on `T` gets the replacement.
+    ///
+    /// ```ignore
+    /// let app = TestApp::builder().replace(FakeClock::at(NOON)).start().await?;
+    /// ```
+    pub fn replace<T: Send + Sync + 'static>(mut self, instance: T) -> Self {
+        self.overrides.push(Box::new(move |b: oxide_boot::AppBuilder| b.replace(instance)));
+        self
+    }
+
     /// Starts the application with the configured overrides.
     pub async fn start(self) -> Result<TestApplication, BootError> {
         let mut env = HashMap::from([
@@ -60,7 +78,11 @@ impl TestAppBuilder {
             ("OXIDE_MANAGEMENT_PORT".to_string(), "0".to_string()),
         ]);
         env.extend(self.env);
-        let app = OxideApplication::builder().base_dir(&self.base_dir).env(env).start().await?;
+        let mut builder = OxideApplication::builder().base_dir(&self.base_dir).env(env);
+        for apply in self.overrides {
+            builder = apply(builder);
+        }
+        let app = builder.start().await?;
         Ok(TestApplication { app })
     }
 }

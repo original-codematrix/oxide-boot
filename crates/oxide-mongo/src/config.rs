@@ -139,6 +139,70 @@ inventory::submit! {
 // Collection helpers referenced by generated repository code.
 // ---------------------------------------------------------------------------
 
+/// Paging and ordering for a derived query — the `Pageable` equivalent.
+///
+/// Passed as the last parameter of a repository method, which is what tells
+/// the macro to apply it:
+///
+/// ```ignore
+/// async fn find_all_by_tag(&self, tag: String, page: Page) -> oxide_mongo::Result<Vec<Note>>;
+/// ```
+///
+/// Without it a derived query returns *every* match, which is fine for a
+/// bounded collection and a denial of service against the caller for
+/// anything else -- a 20k-document corpus made one list endpoint serialize
+/// ~6,700 documents per request in this repository's own benchmark.
+#[derive(Debug, Clone, Default)]
+pub struct Page {
+    /// Documents to skip. Note that Mongo walks them, so deep offsets get
+    /// linearly slower; past a few pages, range on an indexed field instead.
+    pub skip: u64,
+    /// Maximum documents to return. `0` means no limit, matching Mongo's own
+    /// interpretation.
+    pub limit: i64,
+    /// Sort specification, e.g. `doc! { "created_at": -1 }`. Unsorted
+    /// paging is unstable: without an order, two pages can overlap or skip
+    /// documents.
+    pub sort: Option<Document>,
+}
+
+impl Page {
+    /// The first `size` documents.
+    pub fn first(size: i64) -> Self {
+        Self { skip: 0, limit: size, sort: None }
+    }
+
+    /// Page `index` (zero-based) of `size` documents.
+    pub fn of(index: u64, size: i64) -> Self {
+        Self { skip: index * size.max(0) as u64, limit: size, sort: None }
+    }
+
+    /// Adds a sort. Strongly recommended whenever `skip` is non-zero.
+    pub fn sorted_by(mut self, sort: Document) -> Self {
+        self.sort = Some(sort);
+        self
+    }
+}
+
+/// `find_all` with paging and ordering applied.
+pub async fn find_page<T>(collection: &Collection<T>, filter: Document, page: &Page) -> Result<Vec<T>, crate::Error>
+where
+    T: serde::de::DeserializeOwned + Send + Sync,
+{
+    use futures::TryStreamExt;
+    let mut find = collection.find(filter);
+    if page.skip > 0 {
+        find = find.skip(page.skip);
+    }
+    if page.limit > 0 {
+        find = find.limit(page.limit);
+    }
+    if let Some(sort) = &page.sort {
+        find = find.sort(sort.clone());
+    }
+    find.await?.try_collect::<Vec<T>>().await.map_err(Into::into)
+}
+
 pub async fn find_all<T>(collection: &Collection<T>, filter: Document) -> Result<Vec<T>, crate::Error>
 where
     T: serde::de::DeserializeOwned + Send + Sync,

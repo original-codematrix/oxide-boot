@@ -2537,6 +2537,7 @@ dependencies = [
  "oxide-boot",
  "oxide-core",
  "oxide-mongo-macros",
+ "oxide-mongo-test",
  "oxide-test",
  "oxide-web",
  "regex",
@@ -3754,7 +3755,6 @@ name = "showcase"
 version = "0.1.0"
 dependencies = [
  "axum",
- "futures",
  "metrics",
  "mongodb",
  "oxide-boot",

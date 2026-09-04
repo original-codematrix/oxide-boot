@@ -1,7 +1,9 @@
 //! Application lifecycle: config loading, logging init, DI assembly, and
 //! ordered `post_construct` / `pre_destroy` hook execution.
 
-use oxide_core::{AppConfig, ComponentDescriptor, ConfigError, Context, ContextBuilder, ContextError, assemble};
+use oxide_core::{
+    AppConfig, ComponentDescriptor, ConfigError, Context, ContextBuilder, ContextError, assemble_with_overrides,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +28,7 @@ pub struct OxideApplication;
 
 impl OxideApplication {
     pub fn builder() -> AppBuilder {
-        AppBuilder { base_dir: PathBuf::from("."), env: None }
+        AppBuilder { base_dir: PathBuf::from("."), env: None, overrides: Vec::new() }
     }
 
     /// Boots the application and blocks until SIGTERM / ctrl-c.
@@ -35,9 +37,15 @@ impl OxideApplication {
     }
 }
 
+/// A component supplied from outside, replacing the one the container would
+/// have built. Boxed as a closure because the type is erased here and only
+/// known at the call site.
+type Override = Box<dyn FnOnce(&mut ContextBuilder) + Send>;
+
 pub struct AppBuilder {
     base_dir: PathBuf,
     env: Option<HashMap<String, String>>,
+    overrides: Vec<(std::any::TypeId, Override)>,
 }
 
 impl AppBuilder {
@@ -49,6 +57,26 @@ impl AppBuilder {
     /// Overrides the process environment (used by tests for isolation).
     pub fn env(mut self, env: HashMap<String, String>) -> Self {
         self.env = Some(env);
+        self
+    }
+
+    /// Supplies `instance` in place of the component the container would
+    /// have built for `T` — the `@MockBean` equivalent.
+    ///
+    /// The registered descriptor for `T` is skipped entirely rather than
+    /// constructed and then overwritten, so a component whose construction
+    /// has side effects (opening a connection, spawning a task) does not run
+    /// at all. Its `post_construct` and `pre_destroy` hooks do not run
+    /// either, which is the point: a replaced Kafka listener should not
+    /// subscribe.
+    ///
+    /// Anything that depends on `T` still resolves, and gets the
+    /// replacement.
+    pub fn replace<T: Send + Sync + 'static>(mut self, instance: T) -> Self {
+        self.overrides.push((
+            std::any::TypeId::of::<T>(),
+            Box::new(move |builder: &mut ContextBuilder| builder.insert(instance)),
+        ));
         self
     }
 
@@ -90,8 +118,13 @@ impl AppBuilder {
 
         let mut seed = ContextBuilder::new();
         seed.insert(config);
+        let mut replaced: Vec<std::any::TypeId> = Vec::with_capacity(self.overrides.len());
+        for (type_id, apply) in self.overrides {
+            replaced.push(type_id);
+            apply(&mut seed);
+        }
         let descriptors: Vec<&'static ComponentDescriptor> = inventory::iter::<ComponentDescriptor>().collect();
-        let (context, order) = assemble(descriptors, seed)?;
+        let (context, order) = assemble_with_overrides(descriptors, seed, &replaced)?;
         let context = Arc::new(context);
 
         let mut started: Vec<&'static ComponentDescriptor> = Vec::with_capacity(order.len());

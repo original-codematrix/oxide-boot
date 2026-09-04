@@ -13,7 +13,6 @@ oxide-mongo.workspace = true
 oxide-redis.workspace = true
 # Named directly by the code `#[mongo_repository]` generates.
 mongodb.workspace = true
-futures.workspace = true
 axum.workspace = true
 serde.workspace = true
 serde_json.workspace = true

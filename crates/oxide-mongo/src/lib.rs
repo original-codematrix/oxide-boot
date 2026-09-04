@@ -6,14 +6,14 @@ pub mod config;
 pub mod document;
 mod health;
 
-pub use config::{MongoClient, MongoProps};
+pub use config::{MongoClient, MongoProps, Page};
 
 /// Internal paths referenced by generated macro code.
 #[doc(hidden)]
 pub mod __private {
     pub use crate::config::{
-        count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, find_one, insert, merge,
-        raw_filter, save,
+        count, delete_many, delete_one, derived_filter, exists, find_all, find_by_id, find_one, find_page, insert,
+        merge, raw_filter, save,
     };
     pub use crate::document::DocumentMeta;
     pub use inventory;
