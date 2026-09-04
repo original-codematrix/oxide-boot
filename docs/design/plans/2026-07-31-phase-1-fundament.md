@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Edition `2024`, `rust-version = "1.85"`, Workspace-Resolver `"3"`; alle Versionen NUR in `[workspace.dependencies]` pflegen.
-- Spec: `docs/superpowers/specs/2026-07-31-oxide-boot-design.md` — bei Widerspruch gewinnt die Spec.
+- Spec: `docs/design/specs/2026-07-31-oxide-boot-design.md` — bei Widerspruch gewinnt die Spec.
 - Alle Framework-APIs async-first; Components sind `Send + Sync`-Singletons in `Arc`.
 - Generierter Macro-Code referenziert nur `::oxide_boot::__private::*` (nie `::oxide_core::*` direkt), damit User-Crates nur `oxide-boot` als Dependency brauchen.
 - Fail-Fast: Fehler beim Boot (Config fehlt, Dependency fehlt, Zyklus) brechen mit sprechender Fehlermeldung ab, die den betroffenen Component-/Key-Namen nennt.
@@ -1923,7 +1923,7 @@ injection, `application.yml` with profiles, and an opinionated boot lifecycle �
 built on Tokio and battle-tested crates.
 
 **Status: Phase 1 (foundation).** Web, MongoDB, Kafka, HTTP client and
-observability starters are planned — see `docs/superpowers/specs/`.
+observability starters are planned — see `docs/design/specs/`.
 
 ## Quick start
 

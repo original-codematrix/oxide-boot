@@ -924,7 +924,7 @@ git commit -m "feat(observability): otlp export with parent-based sampling and s
 ### Task 10: Beispiel, README, Spec-Note, Workspace-Gate
 
 **Files:**
-- Modify: `examples/rest-api/` (Cargo.toml + application.yml + lib.rs + tests/api.rs), `README.md`, `docs/superpowers/specs/2026-07-31-oxide-boot-design.md` (§5-Note)
+- Modify: `examples/rest-api/` (Cargo.toml + application.yml + lib.rs + tests/api.rs), `README.md`, `docs/design/specs/2026-07-31-oxide-boot-design.md` (§5-Note)
 
 **Interfaces:**
 - Consumes: alles aus 2b

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.88, axum 0.8, tower-http 0.7 (neu), rdkafka, mongodb 3.8, reqwest, opentelemetry 0.32 (Upgrade), testcontainers 0.28, trybuild.
 
-**Spec:** `docs/superpowers/specs/2026-09-02-phase-4b-hardening-design.md`
+**Spec:** `docs/design/specs/2026-09-02-phase-4b-hardening-design.md`
 
 ## Global Constraints
 

@@ -6,7 +6,7 @@ built on Tokio and battle-tested crates.
 
 **Status: Phase 3 (integrations) complete; Phase 4 (hardening) in progress.**
 Web, observability, Kafka, MongoDB, HTTP client and test starters are
-implemented — see `docs/superpowers/specs/` for the design and the phase-4
+implemented — see `docs/design/specs/` for the design and the phase-4
 hardening backlog.
 
 ## Quick start

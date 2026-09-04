@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Alles aus Phase 1 gilt weiter: Edition `2024`, `rust-version = "1.85"`, Versionen NUR in `[workspace.dependencies]`, `thiserror`/kein `anyhow`, kein `unwrap()`/`expect()` in Library-Code (Ausnahmen nur unreachable-by-construction, im Report geflaggt), Code/Kommentare Englisch, Conventional Commits, TDD mit RED/GREEN-Evidenz.
-- Spec: `docs/superpowers/specs/2026-07-31-oxide-boot-design.md` (§5 Env-Binding-Regel, §6 Web-Layer); bei Widerspruch gewinnt die Spec.
+- Spec: `docs/design/specs/2026-07-31-oxide-boot-design.md` (§5 Env-Binding-Regel, §6 Web-Layer); bei Widerspruch gewinnt die Spec.
 - Macro-generierter Code aus `oxide-web-macros` referenziert NUR `::oxide_web::__private::*`-Pfade (User-Crates deps: `oxide-boot` + `oxide-web`, Spring-Starter-Modell).
 - Etablierte Testkonventionen: Boot-Tests im selben Binary serialisieren über eine `BOOT_LOCK`-`tokio::sync::Mutex` und delta-checken Counter (inventory ist prozess-global); Komponenten, die in einem Test-Binary registriert sind, booten in JEDEM Test dieses Binaries — die geteilte Config-Helper-Funktion muss alle Keys aller registrierten Components liefern; Tests binden Server IMMER an Port 0 und lesen die echte Adresse über `WebServer::local_addr()`.
 - Deterministik: Env-Overrides werden sortiert angewendet (seit d58c7be); Routen werden sortiert gemountet.

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 1.88+ (stable), cargo-audit 0.22, cargo-deny 0.20, testcontainers 0.28, rustfmt, clippy, GNU make, Docker (für Container-Tests).
 
-**Spec:** `docs/superpowers/specs/2026-09-02-phase-4a-consolidation-design.md`
+**Spec:** `docs/design/specs/2026-09-02-phase-4a-consolidation-design.md`
 
 ## Global Constraints
 
@@ -23,7 +23,7 @@
   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KCbCYDWYust7oN81JcesaE
   ```
-- Scratch-Verzeichnis für Zwischenkopien: `a scratch directory outside the repository` (im Folgenden `$SCRATCH`).
+- Scratch-Verzeichnis für Zwischenkopien: ein Verzeichnis außerhalb des Repos (im Folgenden `$SCRATCH`).
 - Lizenz-Allowlist (Spec §5) erweitert um die im Graphen tatsächlich vorkommenden permissiven Lizenzen `BSL-1.0` (ryu) und `CDLA-Permissive-2.0` (webpki-roots); Copyleft wird nicht aufgenommen.
 - Abweichung zur Spec, bewusst: Der Code wurde nie mit rustfmt formatiert (317 Dateien mit Diff). Task 6 führt `rustfmt.toml` (`max_width = 120`, `use_small_heuristics = "Max"`) ein und formatiert einmalig; ohne diesen Schritt wäre das `fmt`-Ziel aus Spec §5 sofort rot.
 
@@ -301,13 +301,13 @@ Ersetze in `README.md` die Zeilen 7-8
 
 ```
 **Status: Phase 1 (foundation).** Web, MongoDB, Kafka, HTTP client and
-observability starters are planned — see `docs/superpowers/specs/`.
+observability starters are planned — see `docs/design/specs/`.
 ```
 durch
 ```
 **Status: Phase 3 (integrations) complete; Phase 4 (hardening) in progress.**
 Web, observability, Kafka, MongoDB, HTTP client and test starters are
-implemented — see `docs/superpowers/specs/` for the design and the phase-4
+implemented — see `docs/design/specs/` for the design and the phase-4
 hardening backlog.
 ```
 
@@ -316,7 +316,7 @@ hardening backlog.
 ```bash
 git worktree remove --force .claude/worktrees/phase-3a
 git branch -D phase-3a-kafka
-git worktree list        # Expected: nur the repository root
+git worktree list        # Expected: nur das Repo-Wurzelverzeichnis
 git branch               # Expected: continue-next, main
 ```
 
@@ -692,4 +692,4 @@ git branch --list phase-3a-kafka                        # Expected: leer
 
 - [ ] **Step 5: Abschlussbericht**
 
-Kurz zusammenfassen: Commit-Liste, Scan-Ergebnis vorher/nachher (3 → 0 Advisories), Testzahl, und alle während der Umsetzung aufgefallenen Bugs als Ergänzung in `docs/superpowers/specs/2026-09-02-phase-4a-consolidation-design.md` Anhang A eintragen (eigener `docs:`-Commit).
+Kurz zusammenfassen: Commit-Liste, Scan-Ergebnis vorher/nachher (3 → 0 Advisories), Testzahl, und alle während der Umsetzung aufgefallenen Bugs als Ergänzung in `docs/design/specs/2026-09-02-phase-4a-consolidation-design.md` Anhang A eintragen (eigener `docs:`-Commit).
