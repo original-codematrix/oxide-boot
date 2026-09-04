@@ -1,7 +1,7 @@
 # Local CI entry point. Requires: rustup (stable), Docker (container tests),
 # `cargo install cargo-audit cargo-deny --locked`.
 
-.PHONY: fmt clippy test check audit ci msrv clean clean-debug loadtest loadtest-showcase benchmark capacity saturation floor stack stack-down
+.PHONY: fmt clippy test check audit ci msrv smoke clean clean-debug loadtest loadtest-showcase benchmark capacity saturation floor stack stack-down
 
 fmt:
 	cargo fmt --all -- --check
@@ -13,6 +13,14 @@ test:
 	cargo test --workspace
 
 check: fmt clippy test
+
+# The fast check, and the only one that needs no Docker: every crate's unit
+# tests plus a full application boot serving real requests. Nine test files in
+# the suite need a running daemon, so this is what a contributor without one
+# can still run.
+smoke:
+	cargo test --workspace --lib
+	cargo test -p oxide-smoke
 
 audit:
 	cargo audit

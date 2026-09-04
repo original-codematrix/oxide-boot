@@ -32,6 +32,8 @@ pub enum Error {
     Timeout(std::time::Duration),
     #[error("redis client has not been started yet (post_construct has not run)")]
     NotStarted,
+    #[error("redis is unavailable; the last connection attempt failed and the retry cooldown has not elapsed")]
+    Unavailable,
 }
 
 /// Result alias for the Redis starter.

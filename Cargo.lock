@@ -2380,6 +2380,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-smoke"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "oxide-boot",
+ "oxide-observability",
+ "oxide-web",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "oxide-test"
 version = "0.1.0"
 dependencies = [
@@ -3317,9 +3332,12 @@ dependencies = [
  "mongodb",
  "oxide-boot",
  "oxide-kafka",
+ "oxide-kafka-test",
  "oxide-mongo",
+ "oxide-mongo-test",
  "oxide-observability",
  "oxide-redis",
+ "oxide-redis-test",
  "oxide-test",
  "oxide-web",
  "rdkafka",

@@ -1,0 +1,28 @@
+# Cross-crate smoke test. Its own workspace member because the test needs
+# `oxide-web` and `oxide-observability`, and both already depend on
+# `oxide-boot` -- putting it in any of them would either be a dependency
+# cycle or would test only part of the stack.
+[package]
+name = "oxide-smoke"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# No library and no binary: this crate exists only for `tests/`.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+oxide-boot.workspace = true
+oxide-web.workspace = true
+oxide-observability.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+tempfile.workspace = true
+tokio.workspace = true

@@ -24,6 +24,7 @@ members = [
     "examples/http-client",
     "examples/kafka",
     "examples/showcase",
+    "tests/smoke",
 ]
 
 [workspace.package]
