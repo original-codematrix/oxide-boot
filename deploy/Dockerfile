@@ -21,6 +21,9 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates crates
 COPY examples examples
+# The workspace lists `tests/smoke` as a member, so cargo refuses to read the
+# manifest without it -- even though nothing here builds it.
+COPY tests tests
 RUN cargo build --release -p showcase --bin showcase --bin seed
 
 FROM debian:bookworm-slim AS runtime

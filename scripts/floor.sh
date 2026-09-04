@@ -24,6 +24,8 @@ trap cleanup EXIT INT TERM
 
 cargo build --release -p rest-api 2>&1 | tail -1
 
+# Env passthrough so the caller can price the instrumentation itself, e.g.
+# OXIDE_METRICS_HTTP_HISTOGRAM=false scripts/floor.sh
 OXIDE_SERVER_PORT="$PORT" OXIDE_MANAGEMENT_PORT="$MGMT" OXIDE_LOGGING_LEVEL_ROOT=warn \
   sh -c 'cd "$1" && exec "$2"' _ "$ROOT/examples/rest-api" "$ROOT/target/release/rest-api" \
   > "$ROOT/target/floor-app.log" 2>&1 &
