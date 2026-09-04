@@ -743,6 +743,7 @@ so no extra quoting is needed for the common case.
 | `@DataMongoTest` / `@DataRedisTest` / `@EmbeddedKafka` | `MongoTest::start()` / `RedisTest::start()` / `KafkaTest::start()` |
 | Beans of one interface as `List<T>` | `ctx.get_all::<dyn T>()` via `#[component(provides(T))]` |
 | Micrometer meter pre-registration | `MetricRegistration::counter(...)` |
+| `management.metrics.distribution.*` | `oxide.metrics.http.{enabled,histogram,buckets}` |
 
 ### Starter coverage
 

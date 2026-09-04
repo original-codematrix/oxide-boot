@@ -102,11 +102,26 @@ pub(crate) async fn observe(req: axum::extract::Request, next: axum::middleware:
     let status = response.status().as_str().to_owned();
     span.record("http.status_code", status.as_str());
 
-    metrics::histogram!(
-        "http_server_requests_seconds",
-        "method" => method, "uri" => route, "status" => status
-    )
-    .record(started.elapsed().as_secs_f64());
+    let props = crate::metrics::HttpMetricsProps::current();
+    if props.enabled {
+        // The counter is always emitted when metrics are on: it is one
+        // series per method/route/status, and rate, throughput and error
+        // ratio are all derived from it. The histogram costs fourteen series
+        // for the same triple, so it is separately switchable.
+        metrics::counter!(
+            "http_server_requests_total",
+            "method" => method.clone(), "uri" => route.clone(), "status" => status.clone()
+        )
+        .increment(1);
+
+        if props.histogram {
+            metrics::histogram!(
+                "http_server_requests_seconds",
+                "method" => method, "uri" => route, "status" => status
+            )
+            .record(started.elapsed().as_secs_f64());
+        }
+    }
 
     response
 }

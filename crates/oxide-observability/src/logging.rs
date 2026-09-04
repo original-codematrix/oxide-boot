@@ -25,6 +25,13 @@ inventory::submit! {
 }
 
 pub(crate) fn init(config: &AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Metric configuration has to be in place *before* the recorder is
+    // installed: bucket bounds are baked into the recorder at construction,
+    // and this initialiser is the earliest point where both the resolved
+    // config and the recorder are reachable. Component construction is far
+    // too late -- by then something has already recorded a metric.
+    let _ = crate::metrics::HTTP_METRICS
+        .set(config.get_opt::<crate::metrics::HttpMetricsProps>("oxide.metrics.http")?.unwrap_or_default());
     crate::metrics::prometheus_handle(); // recorder first, so early code can record
 
     let filter = tracing_subscriber::EnvFilter::new(oxide_boot::logging_directives(config));
