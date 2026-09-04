@@ -19,7 +19,7 @@ pub use oxide_macros::{ConfigProperties, component, main};
 pub mod __private {
     pub use inventory;
     pub use oxide_core::serde_yaml_ng;
-    pub use oxide_core::{AppConfig, ComponentDescriptor, ConfigDefaults, Context, ContextError, Inject};
+    pub use oxide_core::{AppConfig, ComponentDescriptor, ConfigDefaults, Context, ContextError, Inject, TraitBinding};
     pub use serde;
     pub use tokio;
 }

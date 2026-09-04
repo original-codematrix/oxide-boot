@@ -6,7 +6,8 @@ pub mod config;
 pub mod container;
 pub use config::{AppConfig, ConfigDefaults, ConfigError};
 pub use container::{
-    ComponentDescriptor, ComponentResult, Context, ContextBuilder, ContextError, HookFn, Inject, assemble,
+    ComponentDescriptor, ComponentResult, Context, ContextBuilder, ContextError, HookFn, Inject, TraitBinding,
+    assemble, assemble_with_bindings,
 };
 
 // Re-exported so `oxide-macros`-generated code (which only depends on

@@ -35,6 +35,15 @@ impl<T> std::ops::Deref for Inject<T> {
     }
 }
 
+impl<T> Inject<T> {
+    /// The underlying `Arc`, for the one case `Deref` cannot serve: coercing
+    /// a component to `Arc<dyn Trait>`. Used by the code `#[component]`
+    /// generates for `provides(...)`.
+    pub fn into_arc(self) -> Arc<T> {
+        self.0
+    }
+}
+
 /// Static description of one component: how to identify it, what it needs,
 /// how to build it. Registered via `inventory` by the `#[component]` macro.
 ///
@@ -63,6 +72,50 @@ pub struct ComponentDescriptor {
 }
 
 inventory::collect!(ComponentDescriptor);
+
+/// Registers one component as an implementation of one trait, so it can be
+/// resolved as `Arc<dyn Trait>` and collected into `Vec<Arc<dyn Trait>>`.
+///
+/// The container is keyed by `TypeId`, which means a component is normally
+/// only reachable under its own concrete type: two implementations of the
+/// same trait are two unrelated entries, and there is no way to ask for "all
+/// of them". A binding is the seam that fixes that without giving up the
+/// concrete path -- `ctx.get::<EnglishGreeter>()` keeps working, and
+/// `ctx.get_all::<dyn Greeter>()` now works too.
+///
+/// The stored value is an `Arc<dyn Trait>` boxed inside `Arc<dyn Any>`: the
+/// coercion from the concrete type has to happen where that type is known,
+/// which is in the generated `bind` closure, not here.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct TraitBinding {
+    pub trait_name: &'static str,
+    pub component_name: &'static str,
+    /// `TypeId::of::<dyn Trait>()`.
+    pub trait_id: fn() -> TypeId,
+    /// `TypeId::of::<Concrete>()`; used to order bindings deterministically
+    /// and to report which component a failed binding came from.
+    pub component_id: fn() -> TypeId,
+    /// Resolves the concrete component from the context and returns it as an
+    /// erased `Arc<Arc<dyn Trait>>`. `None` when the component is absent,
+    /// which `assemble` treats as a hard error -- a binding always names a
+    /// component that was registered alongside it.
+    pub bind: fn(&Context) -> Option<Arc<dyn Any + Send + Sync>>,
+}
+
+impl TraitBinding {
+    pub const fn new(
+        trait_name: &'static str,
+        component_name: &'static str,
+        trait_id: fn() -> TypeId,
+        component_id: fn() -> TypeId,
+        bind: fn(&Context) -> Option<Arc<dyn Any + Send + Sync>>,
+    ) -> Self {
+        Self { trait_name, component_name, trait_id, component_id, bind }
+    }
+}
+
+inventory::collect!(TraitBinding);
 
 fn no_deps() -> Vec<(TypeId, &'static str)> {
     Vec::new()
@@ -188,17 +241,65 @@ impl ContextBuilder {
 #[derive(Clone)]
 pub struct Context {
     map: Arc<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+    /// Keyed by `TypeId::of::<dyn Trait>()`; each entry holds the erased
+    /// `Arc<dyn Trait>` handles contributed by [`TraitBinding`]s, in a
+    /// deterministic order.
+    traits: Arc<HashMap<TypeId, Vec<Arc<dyn Any + Send + Sync>>>>,
 }
 
 impl Context {
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Inject<T>> {
         self.map.get(&TypeId::of::<T>()).and_then(|any| Arc::clone(any).downcast::<T>().ok()).map(Inject)
     }
+
+    /// Every component registered as an implementation of `T`, where `T` is
+    /// an unsized trait object type: `ctx.get_all::<dyn Greeter>()`.
+    ///
+    /// Returns an empty vector when nothing implements it -- "no
+    /// implementations" is a legitimate state for an extension point, and
+    /// callers that need at least one should say so themselves.
+    ///
+    /// Order is stable across runs (bindings are sorted by component type
+    /// name), so a chain of handlers built from this does not silently
+    /// reorder itself between boots.
+    pub fn get_all<T: ?Sized + Send + Sync + 'static>(&self) -> Vec<Arc<T>> {
+        self.traits
+            .get(&TypeId::of::<T>())
+            .map(|entries| {
+                entries
+                    .iter()
+                    // Each entry is an `Arc<Arc<dyn T>>`; the inner Arc is
+                    // what callers want, so clone it out of the box.
+                    .filter_map(|any| Arc::clone(any).downcast::<Arc<T>>().ok())
+                    .map(|boxed| Arc::clone(&*boxed))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The single implementation of `T`, or `None` when there are none or
+    /// more than one. Ambiguity returns `None` rather than picking one:
+    /// silently choosing between two implementations is how a wrong
+    /// dependency reaches production unnoticed.
+    pub fn get_one<T: ?Sized + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        let mut all = self.get_all::<T>();
+        if all.len() == 1 { all.pop() } else { None }
+    }
+
+    /// How many components implement `T`. Useful for a startup log line, and
+    /// for telling "none registered" apart from "several" after `get_one`
+    /// returns `None`.
+    pub fn count_of<T: ?Sized + Send + Sync + 'static>(&self) -> usize {
+        self.traits.get(&TypeId::of::<T>()).map_or(0, Vec::len)
+    }
 }
 
 impl std::fmt::Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Context").field("component_count", &self.map.len()).finish_non_exhaustive()
+        f.debug_struct("Context")
+            .field("component_count", &self.map.len())
+            .field("trait_count", &self.traits.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -207,7 +308,18 @@ impl std::fmt::Debug for Context {
 /// duplicates and cycles. Returns the construction order for lifecycle hooks.
 pub fn assemble(
     descriptors: Vec<&'static ComponentDescriptor>,
+    seed: ContextBuilder,
+) -> Result<(Context, Vec<&'static ComponentDescriptor>), ContextError> {
+    assemble_with_bindings(descriptors, seed, inventory::iter::<TraitBinding>.into_iter().collect())
+}
+
+/// [`assemble`] with the trait bindings passed explicitly, so tests can
+/// exercise binding behaviour without registering into the process-global
+/// inventory (which leaks between tests in the same binary).
+pub fn assemble_with_bindings(
+    descriptors: Vec<&'static ComponentDescriptor>,
     mut seed: ContextBuilder,
+    bindings: Vec<&'static TraitBinding>,
 ) -> Result<(Context, Vec<&'static ComponentDescriptor>), ContextError> {
     let mut by_id: HashMap<TypeId, &'static ComponentDescriptor> = HashMap::new();
     for d in &descriptors {
@@ -268,7 +380,29 @@ pub fn assemble(
         (d.construct)(&mut seed)?;
     }
 
-    Ok((Context { map: Arc::new(seed.map) }, order))
+    // Bindings run after every component exists: a binding resolves its
+    // component out of the finished map, so it cannot run during
+    // construction.
+    let base = Context { map: Arc::new(seed.map), traits: Arc::new(HashMap::new()) };
+
+    let mut bindings = bindings;
+    // Sorted by the component's type name so `get_all` returns a stable
+    // order across runs. Without this the order follows link order, which
+    // changes when an unrelated crate is added.
+    bindings.sort_by_key(|b| (b.trait_name, b.component_name));
+
+    let mut traits: HashMap<TypeId, Vec<Arc<dyn Any + Send + Sync>>> = HashMap::new();
+    for b in bindings {
+        // A binding is emitted next to its component, so a component that is
+        // not in the context means the two were separated -- a linking
+        // mistake, not a configuration choice. Failing here beats an
+        // extension point that is silently one implementation short.
+        let bound = (b.bind)(&base)
+            .ok_or(ContextError::MissingDependency { component: b.trait_name, dependency: b.component_name })?;
+        traits.entry((b.trait_id)()).or_default().push(bound);
+    }
+
+    Ok((Context { traits: Arc::new(traits), ..base }, order))
 }
 
 #[cfg(test)]

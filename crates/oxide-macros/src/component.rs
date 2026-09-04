@@ -15,6 +15,11 @@ pub struct ComponentArgs {
     /// (see `oxide_core::container`): defaults to `0`, the framework's
     /// normal-component default, when the argument is absent.
     pub destroy_order: i32,
+    /// Traits this component should also be resolvable as, written
+    /// `provides(Greeter, Shutdownable)`. Each becomes a `TraitBinding`, so
+    /// the component turns up in `ctx.get_all::<dyn Greeter>()` while
+    /// `ctx.get::<Self>()` keeps working unchanged.
+    pub provides: Vec<syn::Path>,
 }
 
 /// Parses a `post_construct`/`pre_destroy` value: either a bare method name
@@ -53,6 +58,7 @@ pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
         pre_destroy: None,
         pre_destroy_with_ctx: false,
         destroy_order: 0,
+        provides: Vec::new(),
     };
     if args.is_empty() {
         return Ok(out);
@@ -86,9 +92,24 @@ pub fn parse_args(args: TokenStream) -> syn::Result<ComponentArgs> {
             out.destroy_order = i32::try_from(signed)
                 .map_err(|_| syn::Error::new_spanned(&lit, "`destroy_order` must fit in an `i32`"))?;
             Ok(())
+        } else if meta.path.is_ident("provides") {
+            // `provides(A, B)` rather than `provides = A`: a component can
+            // implement several traits, and a list reads better than a
+            // repeated key.
+            meta.parse_nested_meta(|inner| {
+                out.provides.push(inner.path.clone());
+                Ok(())
+            })
+            .map_err(|_| meta.error("expected `provides(TraitName)` or `provides(TraitA, TraitB)`"))?;
+            if out.provides.is_empty() {
+                return Err(meta.error("`provides(...)` needs at least one trait, e.g. `provides(Greeter)`"));
+            }
+            Ok(())
         } else {
-            Err(meta
-                .error("expected `post_construct = <method>`, `pre_destroy = <method>` or `destroy_order = <integer>`"))
+            Err(meta.error(
+                "expected `post_construct = <method>`, `pre_destroy = <method>`, `destroy_order = <integer>` \
+                 or `provides(<Trait>)`",
+            ))
         }
     });
     parser.parse2(args)?;
@@ -185,8 +206,35 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
 
     let destroy_order = args.destroy_order;
 
+    // One binding per declared trait. The coercion `Arc<Self> -> Arc<dyn T>`
+    // has to happen here, where the concrete type is still known; the
+    // container only ever sees the already-coerced handle, erased again so it
+    // can live in a `TypeId`-keyed map.
+    let trait_bindings = args.provides.iter().map(|path| {
+        quote! {
+            ::oxide_boot::__private::inventory::submit! {
+                ::oxide_boot::__private::TraitBinding::new(
+                    stringify!(#path),
+                    stringify!(#ident),
+                    ::core::any::TypeId::of::<dyn #path>,
+                    ::core::any::TypeId::of::<#ident>,
+                    |__ctx: &::oxide_boot::__private::Context| {
+                        let __concrete = __ctx.get::<#ident>()?;
+                        let __as_trait: ::std::sync::Arc<dyn #path> = __concrete.into_arc();
+                        ::core::option::Option::Some(
+                            ::std::sync::Arc::new(__as_trait)
+                                as ::std::sync::Arc<dyn ::core::any::Any + ::core::marker::Send + ::core::marker::Sync>
+                        )
+                    },
+                )
+            }
+        }
+    });
+
     Ok(quote! {
         #item
+
+        #(#trait_bindings)*
 
         ::oxide_boot::__private::inventory::submit! {
             ::oxide_boot::__private::ComponentDescriptor::builder(
