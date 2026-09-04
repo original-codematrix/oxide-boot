@@ -65,6 +65,11 @@ PRODUCE_DURING_LOAD="${PRODUCE_DURING_LOAD:-0}"
 DRAIN_PERCENT="${DRAIN_PERCENT:-100}"
 DURATION="${DURATION:-60s}"
 OUT="${OUT:-$ROOT/target/benchmark}"
+# Absolute, always: K6_IN_NETWORK mounts this as a docker volume, and a
+# relative path is rejected as an invalid *volume name* rather than resolved
+# against the working directory -- which loses the whole load phase after the
+# seed and drain have already run.
+[[ "$OUT" = /* ]] || OUT="$ROOT/$OUT"
 
 command -v docker >/dev/null || { echo "missing required tool: docker" >&2; exit 1; }
 command -v k6 >/dev/null || { echo "missing required tool: k6 (brew install k6)" >&2; exit 1; }
@@ -85,11 +90,27 @@ trap cleanup EXIT INT TERM
 # Reads one `showcase_*` counter out of /actuator/prometheus. Absent means the
 # metric has not been emitted yet, which is zero, not an error.
 counter() {
-  curl -fsS "http://127.0.0.1:${MGMT_PORT}/actuator/prometheus" 2>/dev/null \
-    | awk -v m="$1" '$1 == m { print $2; found=1 } END { if (!found) print 0 }' \
-    | head -1
+  # Labels are stripped before the name is compared, and every matching series
+  # is summed.
+  #
+  # An exact `$1 == m` match works only as long as the exporter emits these
+  # counters without labels. Add one label and the line reads
+  # `showcase_events_consumed_total{placement="..."} 200000`, which matches
+  # nothing -- and the failure is silent: the drain loop reads 0 forever and
+  # sits out its full timeout without ever starting the load phase, looking
+  # exactly like a consumer that has wedged.
+  curl -fsS --max-time 10 "http://127.0.0.1:${MGMT_PORT}/actuator/prometheus" 2>/dev/null \
+    | awk -v m="$1" '
+        /^#/ { next }
+        { name = $1; sub(/\{.*/, "", name)
+          if (name == m) { total += $2; found = 1 } }
+        END { printf "%d\n", (found ? total : 0) }'
 }
 
+# Every poll below carries `--max-time`. A health endpoint that aggregates
+# several dependency checks can block for as long as the slowest driver's
+# connection timeout, and without a cap a bounded "120 attempts, one second
+# apart" wait silently becomes an hour of nothing happening.
 start_app() {
   if [[ "$IN_NETWORK" == "1" ]]; then
     # --force-recreate: the service's Prometheus counters are cumulative over
@@ -97,7 +118,7 @@ start_app() {
     # previous run's totals into this one's deltas.
     $COMPOSE --profile in-network up -d --build --force-recreate showcase >/dev/null
     for _ in $(seq 1 120); do
-      curl -fsS "http://127.0.0.1:${MGMT_PORT}/actuator/health" >/dev/null 2>&1 && return 0
+      curl -fsS --max-time 5 "http://127.0.0.1:${MGMT_PORT}/actuator/health" >/dev/null 2>&1 && return 0
       sleep 1
     done
     echo "in-network service did not become healthy within 120s" >&2
@@ -115,7 +136,7 @@ start_app() {
       > "$OUT/app.log" 2>&1 &
   APP_PID=$!
   for _ in $(seq 1 90); do
-    curl -fsS "http://127.0.0.1:${MGMT_PORT}/actuator/health" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 5 "http://127.0.0.1:${MGMT_PORT}/actuator/health" >/dev/null 2>&1 && return 0
     kill -0 "$APP_PID" 2>/dev/null || { echo "app exited during startup:" >&2; tail -40 "$OUT/app.log" >&2; exit 1; }
     sleep 1
   done
