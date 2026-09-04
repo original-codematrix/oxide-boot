@@ -48,6 +48,11 @@ IN_NETWORK="${IN_NETWORK:-0}"
 # cache-hit route that alone was worth +59% (17.2k -> 27.4k req/s). Requires
 # IN_NETWORK=1, since it addresses the service by its compose name.
 K6_IN_NETWORK="${K6_IN_NETWORK:-0}"
+# NO_HTTP=1 replaces the k6 run with an equally long quiet period, so the
+# consumer can be measured with nothing competing for the service. Passing
+# VUS=0 does not achieve this: k6 exits immediately, collapsing the
+# measurement window to nothing and reporting a consume rate of zero.
+NO_HTTP="${NO_HTTP:-0}"
 # Messages per second injected into the topic *during* the load phase, on top
 # of what the REST writes produce. This is what makes the lag scenario
 # realistic: a backlog that is only ever drained down is not the situation a
@@ -269,7 +274,11 @@ echo "    Grafana: http://localhost:3000/d/oxide-showcase"
 before_consumed=$drain_consumed
 before_ts=$(date +%s)
 
-if [[ "$K6_IN_NETWORK" == "1" ]]; then
+if [[ "$NO_HTTP" == "1" ]]; then
+  quiet=$(echo "$DURATION" | tr -dc '0-9')
+  echo "    NO_HTTP=1: holding for ${quiet}s with no HTTP load, measuring the consumer alone"
+  sleep "$quiet"
+elif [[ "$K6_IN_NETWORK" == "1" ]]; then
   [[ "$IN_NETWORK" == "1" ]] || { echo "K6_IN_NETWORK=1 requires IN_NETWORK=1" >&2; exit 1; }
   NET=$(docker inspect oxide-loadtest-showcase-1 --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
   docker run --rm --network "$NET" \
