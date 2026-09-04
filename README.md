@@ -739,7 +739,10 @@ so no extra quoting is needed for the common case.
 | `@Scheduled(cron = ...)` | `#[scheduled(cron = "0 0 3 * * *")]` inside `#[scheduled_tasks]` |
 | `CacheManager` / `opsForValue` | `CacheManager::get("name")` → raw or typed access |
 | `spring.data.redis.url` | `oxide.redis.url` |
-| `@FeignClient` | `#[http_client]` |
+| `@FeignClient(url = "${svc.url}")` | `#[http_client(base_url = "${svc.url}")]` |
+| Feign `Retryer` | `oxide.clients.<name>.retry.*` — off by default |
+| `@Retryable` / spring-retry | `#[retryable(max_attempts = 4, retry_if = "...")]` |
+| `@Recover` | `#[retryable(recover = "fallback")]` |
 | `@SpringBootTest` | `TestApp::builder().start()` |
 | `@MockBean` | `TestApp::builder().replace(mock)` |
 | `Pageable` / `Sort` | `Page::of(index, size).sorted_by(doc! { ... })` as the last parameter |

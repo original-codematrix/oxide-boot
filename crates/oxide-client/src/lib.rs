@@ -54,7 +54,7 @@ pub mod __private {
     pub use crate::send;
     pub use crate::{
         ClientError, default_connect_timeout_seconds, default_request_timeout_seconds, encode_path_segment,
-        resolve_base_url,
+        resolve_base_url, send_with_retry,
     };
     pub use inventory;
     pub use oxide_boot::__private::{AppConfig, ComponentDescriptor, ContextError};
@@ -82,7 +82,202 @@ pub fn resolve_base_url(value: &str, config: &oxide_core::AppConfig) -> Result<S
 /// `/invoices/{id}`), known at macro-expansion time — used as the `uri`
 /// metric label instead of the concrete request path so cardinality stays
 /// bounded regardless of how many distinct path-parameter values are called.
+/// Retry settings for one client, bound to `oxide.clients.<name>.retry`.
+///
+/// **Off by default.** A retry on an HTTP call is not free of consequence:
+/// retrying a `POST` that in fact succeeded, and whose response was lost,
+/// creates the resource twice. Spring Cloud OpenFeign takes the same
+/// position (`Retryer.NEVER_RETRY`), and so does this.
+///
+/// When it is switched on, only *idempotent* methods are retried unless
+/// `retry-non-idempotent` says otherwise. `GET`, `HEAD`, `PUT`, `DELETE` and
+/// `OPTIONS` are safe to repeat by definition; `POST` and `PATCH` are not,
+/// and making that an explicit choice is the difference between a duplicate
+/// order and a caught outage.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ClientRetryProps {
+    /// Total attempts, including the first. `1` -- the default -- is off.
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+    #[serde(default = "default_backoff_ms")]
+    pub backoff_ms: u64,
+    #[serde(default = "default_max_backoff_ms")]
+    pub max_backoff_ms: u64,
+    #[serde(default = "default_multiplier")]
+    pub multiplier: f64,
+    #[serde(default = "default_jitter")]
+    pub jitter: f64,
+    /// Allows `POST` and `PATCH` to be retried. See the type docs.
+    #[serde(default)]
+    pub retry_non_idempotent: bool,
+}
+
+fn default_max_attempts() -> u32 {
+    1
+}
+fn default_backoff_ms() -> u64 {
+    100
+}
+fn default_max_backoff_ms() -> u64 {
+    5_000
+}
+fn default_multiplier() -> f64 {
+    2.0
+}
+fn default_jitter() -> f64 {
+    0.25
+}
+
+impl Default for ClientRetryProps {
+    fn default() -> Self {
+        Self {
+            max_attempts: default_max_attempts(),
+            backoff_ms: default_backoff_ms(),
+            max_backoff_ms: default_max_backoff_ms(),
+            multiplier: default_multiplier(),
+            jitter: default_jitter(),
+            retry_non_idempotent: false,
+        }
+    }
+}
+
+impl ClientRetryProps {
+    fn policy(&self) -> oxide_boot::retry::RetryPolicy {
+        oxide_boot::retry::RetryPolicy {
+            max_attempts: self.max_attempts,
+            initial_backoff: std::time::Duration::from_millis(self.backoff_ms),
+            multiplier: self.multiplier,
+            max_backoff: std::time::Duration::from_millis(self.max_backoff_ms),
+            jitter: self.jitter,
+        }
+    }
+}
+
+/// Whether repeating this method is safe without the server's cooperation.
+fn is_idempotent(method: &reqwest::Method) -> bool {
+    matches!(
+        *method,
+        reqwest::Method::GET
+            | reqwest::Method::HEAD
+            | reqwest::Method::PUT
+            | reqwest::Method::DELETE
+            | reqwest::Method::OPTIONS
+            | reqwest::Method::TRACE
+    )
+}
+
+/// Whether a failure is worth repeating.
+///
+/// A transport error (connection refused, timeout, reset) is transient by
+/// nature. Of the status codes, only 5xx and 429 are: a 4xx says the request
+/// itself is wrong, and sending it again produces the same answer more
+/// slowly. 501 and 505 are excluded for the same reason -- the server is
+/// telling us it will never support this.
+fn is_retryable(error: &ClientError) -> bool {
+    match error {
+        ClientError::Http { status, .. } => {
+            status.as_u16() == 429
+                || (status.is_server_error()
+                    && *status != reqwest::StatusCode::NOT_IMPLEMENTED
+                    && *status != reqwest::StatusCode::HTTP_VERSION_NOT_SUPPORTED)
+        }
+        // Connection refused, reset, timeout: transient by nature.
+        ClientError::Transport(_) => true,
+        // Build, JSON, config and the rest are deterministic -- the same
+        // input produces the same failure, so repeating it only adds
+        // latency.
+        _ => false,
+    }
+}
+
 pub async fn send(
+    client: &reqwest::Client,
+    req: reqwest::RequestBuilder,
+    client_name: &str,
+    method: &str,
+    route_template: &str,
+) -> Result<reqwest::Response, ClientError> {
+    send_with_retry(client, req, client_name, method, route_template, &ClientRetryProps::default()).await
+}
+
+/// [`send`] with a retry policy.
+///
+/// The request is cloned per attempt. A body that cannot be cloned -- a
+/// stream -- makes retrying impossible, and that is reported rather than
+/// silently degrading to a single attempt.
+pub async fn send_with_retry(
+    client: &reqwest::Client,
+    req: reqwest::RequestBuilder,
+    client_name: &str,
+    method: &str,
+    route_template: &str,
+    retry: &ClientRetryProps,
+) -> Result<reqwest::Response, ClientError> {
+    let policy = retry.policy();
+    let retrying = policy.max_attempts > 1;
+
+    let mut attempt: u32 = 1;
+    loop {
+        // Cloned before sending, because `execute` consumes the request.
+        // `try_clone` is `None` only for a streaming body.
+        let attempt_req = if retrying {
+            match req.try_clone() {
+                Some(cloned) => cloned,
+                None if attempt == 1 => {
+                    // First attempt only: send it, but do not pretend a
+                    // retry is available.
+                    return send_once(client, req, client_name, method, route_template).await;
+                }
+                None => unreachable!("a non-cloneable body returns on the first attempt above"),
+            }
+        } else {
+            return send_once(client, req, client_name, method, route_template).await;
+        };
+
+        let outcome = send_once(client, attempt_req, client_name, method, route_template).await;
+        let error = match outcome {
+            Ok(response) => return Ok(response),
+            Err(e) => e,
+        };
+
+        let method_allows = retry.retry_non_idempotent
+            || reqwest::Method::from_bytes(method.as_bytes()).map(|m| is_idempotent(&m)).unwrap_or(false);
+
+        if attempt >= policy.max_attempts || !is_retryable(&error) || !method_allows {
+            return Err(error);
+        }
+
+        attempt += 1;
+        let delay = policy.delay_for(attempt);
+        oxide_boot::retry::record_retry(client_name_static(client_name), attempt, delay, &error);
+        metrics::counter!("http_client_retries_total", "client" => client_name.to_string(), "uri" => route_template.to_string())
+            .increment(1);
+        tokio::time::sleep(delay).await;
+    }
+}
+
+/// `record_retry` takes a `&'static str` for the same reason metric labels
+/// do; client names come from the macro and are static in practice, but the
+/// signature here carries a `&str`, so this narrows it without allocating on
+/// the happy path.
+fn client_name_static(name: &str) -> &'static str {
+    // Leaking is bounded by the number of distinct clients in the binary,
+    // which is fixed at compile time.
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let names = NAMES.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut guard = names.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(found) = guard.get(name) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    guard.insert(leaked);
+    leaked
+}
+
+async fn send_once(
     client: &reqwest::Client,
     req: reqwest::RequestBuilder,
     client_name: &str,

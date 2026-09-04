@@ -2506,6 +2506,7 @@ dependencies = [
 name = "oxide-client"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "futures",
  "inventory",
  "metrics",

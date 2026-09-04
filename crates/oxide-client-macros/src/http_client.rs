@@ -81,6 +81,9 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
         pub struct #client_ident {
             pub __client: ::reqwest::Client,
             pub __base_url: ::std::string::String,
+            /// Resolved once at construction rather than read per call, so
+            /// the request path does no configuration lookup.
+            pub __retry: ::oxide_client::ClientRetryProps,
         }
 
         impl #client_ident {
@@ -102,6 +105,11 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
             pub connect_timeout_seconds: u64,
             #[serde(rename = "request-timeout-seconds", default = "::oxide_client::__private::default_request_timeout_seconds")]
             pub request_timeout_seconds: u64,
+            /// Retry policy, off unless configured. See
+            /// `oxide_client::ClientRetryProps` for why it is not on by
+            /// default.
+            #[serde(default)]
+            pub retry: ::oxide_client::ClientRetryProps,
         }
 
         impl ::core::default::Default for #props_ident {
@@ -109,6 +117,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                 Self {
                     connect_timeout_seconds: ::oxide_client::__private::default_connect_timeout_seconds(),
                     request_timeout_seconds: ::oxide_client::__private::default_request_timeout_seconds(),
+                    retry: ::core::default::Default::default(),
                 }
             }
         }
@@ -135,7 +144,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> 
                             type_name: #client_name_lit,
                             message: ::std::string::ToString::to_string(&e),
                         })?;
-                    __builder.insert(#client_ident { __client, __base_url });
+                    __builder.insert(#client_ident { __client, __base_url, __retry: __props.retry.clone() });
                     ::core::result::Result::Ok(())
                 },
             )
@@ -264,7 +273,8 @@ fn generate_method(sig: &syn::Signature, verb: &str, sub_path: &str, client_name
     let route_template_lit = LitStr::new(sub_path, proc_macro2::Span::call_site());
 
     let send_call = quote! {
-        ::oxide_client::__private::send(&self.__client, __req, #client_lit, #metric_name, #route_template_lit)
+        ::oxide_client::__private::send_with_retry(
+            &self.__client, __req, #client_lit, #metric_name, #route_template_lit, &self.__retry)
     };
 
     // Parse the return type: `Result<T, _>` → deserialize the body as `T`;

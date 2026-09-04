@@ -104,7 +104,11 @@ async fn http_client_hits_real_server() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let client = NotesClient { __client: reqwest::Client::new(), __base_url: format!("http://{addr}") };
+    let client = NotesClient {
+        __client: reqwest::Client::new(),
+        __base_url: format!("http://{addr}"),
+        __retry: Default::default(),
+    };
     let _ = BASE;
 
     // POST create.
@@ -145,7 +149,11 @@ async fn path_injection_cannot_escape_the_route() {
         axum::serve(listener, app).await.unwrap();
     });
 
-    let client = NotesClient { __client: reqwest::Client::new(), __base_url: format!("http://{addr}") };
+    let client = NotesClient {
+        __client: reqwest::Client::new(),
+        __base_url: format!("http://{addr}"),
+        __retry: Default::default(),
+    };
 
     let escaped = client.get_raw(Path("../notes".to_string())).await.expect_err("must not reach the list route");
     assert_eq!(escaped.status().map(|s| s.as_u16()), Some(404));
