@@ -99,6 +99,15 @@ pub(crate) async fn observe(req: axum::extract::Request, next: axum::middleware:
 
     // `as_str()` reads a static table and copies three bytes; the previous
     // `as_u16().to_string()` formatted an integer to get the same result.
+    //
+    // Going further and returning `Cow::Borrowed` from a `match` over the
+    // common codes -- the same trick `method_label` uses above -- was tried
+    // and reverted. It removed two of the four per-request allocations and
+    // changed throughput by nothing: six alternating floor rounds on a quiet
+    // machine measured 151,094 req/s against 150,252, a paired ratio of
+    // 0.995 with three rounds falling either way and the ranges overlapping.
+    // At 1.5% run-to-run spread an effect of even 2% would have shown. Thirty
+    // lines of status codes to keep in sync were not worth a measured zero.
     let status = response.status().as_str().to_owned();
     span.record("http.status_code", status.as_str());
 
@@ -108,19 +117,24 @@ pub(crate) async fn observe(req: axum::extract::Request, next: axum::middleware:
         // series per method/route/status, and rate, throughput and error
         // ratio are all derived from it. The histogram costs fourteen series
         // for the same triple, so it is separately switchable.
-        metrics::counter!(
-            "http_server_requests_total",
-            "method" => method.clone(), "uri" => route.clone(), "status" => status.clone()
-        )
-        .increment(1);
-
+        // The histogram is recorded first so the counter can move the labels
+        // rather than clone them. The previous order cloned unconditionally,
+        // which meant `histogram: false` still paid for a second label set it
+        // then threw away -- so the switch that exists to make metrics
+        // cheaper saved nothing on the request path.
         if props.histogram {
             metrics::histogram!(
                 "http_server_requests_seconds",
-                "method" => method, "uri" => route, "status" => status
+                "method" => method.clone(), "uri" => route.clone(), "status" => status.clone()
             )
             .record(started.elapsed().as_secs_f64());
         }
+
+        metrics::counter!(
+            "http_server_requests_total",
+            "method" => method, "uri" => route, "status" => status
+        )
+        .increment(1);
     }
 
     response
