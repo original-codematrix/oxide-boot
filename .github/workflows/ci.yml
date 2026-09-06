@@ -22,14 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # rdkafka is built from source (`cmake-build`), and the `security`
-      # feature is on by default, so the SSL and SASL headers have to be
-      # present. Without them the failure is a linker error that does not
-      # mention Kafka at all.
+      # rdkafka is built from source (`cmake-build`) and the `security`
+      # feature is on by default, so librdkafka is configured with
+      # WITH_SSL=1, WITH_SASL=1, WITH_SASL_OAUTHBEARER=1 and WITH_ZLIB=1.
+      #
+      # libcurl is the one that surprises. rdkafka-sys passes WITH_CURL=0, so
+      # it looks unnecessary -- but OAUTHBEARER fetches its token over HTTP,
+      # and `rdkafka_conf.c` includes <curl/curl.h> whenever OAUTHBEARER is
+      # on. Without the header the build dies three hundred lines into a cmake
+      # log, on a message that never mentions Kafka.
       - name: Install librdkafka build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+          sudo apt-get install -y cmake build-essential pkg-config \
+            libssl-dev libsasl2-dev libcurl4-openssl-dev zlib1g-dev
       # rust-toolchain.toml pins the version and pulls in rustfmt + clippy.
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -50,7 +56,8 @@ jobs:
       - name: Install librdkafka build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+          sudo apt-get install -y cmake build-essential pkg-config \
+            libssl-dev libsasl2-dev libcurl4-openssl-dev zlib1g-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.98.1"
@@ -69,7 +76,8 @@ jobs:
       - name: Install librdkafka build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev libsasl2-dev pkg-config
+          sudo apt-get install -y cmake build-essential pkg-config \
+            libssl-dev libsasl2-dev libcurl4-openssl-dev zlib1g-dev
       # The declared MSRV, deliberately not the pinned toolchain: the point is
       # to catch a newly used feature that raises the floor without anyone
       # noticing.
