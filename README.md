@@ -222,8 +222,9 @@ from 4 to 256 against a fixed backlog moves nothing (4 and 64 both land at
 ~5,000 msg/s once warm). Note that the *first* iteration of any sweep reads
 low; discard it.
 
-**What actually made it faster.** On the cache-hit route, measured the same way
-each time:
+**What actually made it faster.** Measured with `scripts/loadtest-showcase.js`,
+which drives the whole mix -- six HTTP calls per iteration, not one route --
+so these are aggregate request rates and not the ceiling of any single route:
 
 | change | req/s | p50 |
 |---|---|---|
@@ -243,8 +244,33 @@ round trips cost the same as one, the round trips are not what the handler is
 paying for. Both `get_many` and `pipeline` are in `RedisTemplate` regardless;
 they earn their keep on higher-latency links, not on a loopback.
 
-Even at 27k req/s the framework floor is 145k, so the remaining gap is still
-the container network, not this code.
+### Where the time goes
+
+The aggregate rate above answers "what does this service do", not "what does
+each layer cost". Driving one route at a time with `scripts/single-route.js`
+separates them. All three measured in the compose network with the load
+generator inside it, 100 VUs, a discarded warm-up window followed by the
+measured one:
+
+| in the path | req/s | measured with |
+|---|---|---|
+| the framework alone, in-memory handler | **147,409** | `make floor` (the rest-api example) |
+| + one Redis round trip, warm cache | **78,902** | `single-route.js` on `GET /api/notes/{id}` |
+| + a Mongo write, a read, a tag query, a Kafka publish | **25,367** | `loadtest-showcase.js`, the full mix |
+
+Read every route against the first line. One Redis round trip costs 46% of
+the framework's ceiling; everything the full mix adds on top of that costs a
+further 68%. **The service is bounded by what it talks to, not by this code**
+-- which the saturation sweep says independently: from 25 to 800 concurrent
+users the process stays between 1.7 and 2.4 cores while throughput plateaus
+near 25k. A process that stops getting faster without running out of CPU is
+waiting on something else.
+
+That is also why framework-level micro-optimisation has stopped paying here.
+Two attempts are documented in `crates/oxide-observability/src/http.rs`: an
+interner for the metric labels measured *slower*, and removing two of the four
+per-request allocations measured as nothing at all (0.995x over six
+alternating rounds, three falling either way). Both were reverted.
 
 The stack publishes the service on **18080/18081**, not the framework defaults,
 so `cargo test` and a running stack no longer fight over 8080/8081.
