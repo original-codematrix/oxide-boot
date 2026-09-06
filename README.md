@@ -81,6 +81,7 @@ make loadtest # release build of the rest-api example under k6 (see below)
 make floor          # the framework's HTTP ceiling, no backends (read the rest against this)
 make benchmark      # all four integrations, phased (see below)
 make stack / stack-down
+make clean-cache    # drops the two caches that never shrink (~14 GB), keeps compiled deps
 make clean    # cargo clean -- `target/` is the only thing here that grows without bound
 ```
 

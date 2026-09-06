@@ -1,7 +1,7 @@
 # Local CI entry point. Requires: rustup (stable), Docker (container tests),
 # `cargo install cargo-audit cargo-deny --locked`.
 
-.PHONY: fmt clippy test check audit ci msrv smoke clean clean-debug loadtest loadtest-showcase benchmark capacity saturation floor stack stack-down
+.PHONY: fmt clippy test check audit ci msrv smoke clean clean-debug clean-cache loadtest loadtest-showcase benchmark capacity saturation floor stack stack-down
 
 fmt:
 	cargo fmt --all -- --check
@@ -42,6 +42,21 @@ clean:
 # ten-minute rebuild before the next run.
 clean-debug:
 	cargo clean --profile dev
+
+# The light cut, for the two directories that grow without ever shrinking.
+#
+# Measured on a working tree at 35 GB: `debug/incremental` held 11 GB across
+# 1,355 directories and `tests/trybuild` another 3 GB. Both are caches --
+# incremental compilation state, and the scratch target the compile-fail
+# tests build into. Neither is ever pruned, and both grow with every edit to
+# any of the 29 workspace members.
+#
+# This is the step between `clean-debug` (drops all 26 GB, including the
+# compiled dependencies) and doing nothing. The compiled dependencies in
+# `debug/deps` survive, so the next build re-runs a non-incremental compile
+# of the workspace crates only -- a minute or two, for 14 GB back.
+clean-cache:
+	rm -rf target/debug/incremental target/tests/trybuild
 
 # Release build of the rest-api example plus a k6 run against it.
 loadtest:
