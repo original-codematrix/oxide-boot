@@ -286,6 +286,29 @@ impl StatsController {
     }
 }
 
+/// A route with nothing behind it, as a reference point for the benchmarks.
+///
+/// Every other number in this example is read against it. `GET /api/notes/{id}`
+/// against a warm cache costs one Redis round trip on top of this; the full
+/// mix adds a Mongo write, a Mongo read, a tag query and a Kafka publish. When
+/// a route sits far below this line, the cost is in what it talks to and not
+/// in the framework -- which is exactly what the measurements found.
+// Empty braces rather than a unit struct: `#[component]` requires named
+// fields, so `struct PingController;` is rejected outright.
+#[component]
+pub struct PingController {}
+
+#[controller("/api/ping")]
+impl PingController {
+    #[get("")]
+    async fn ping(&self) -> Json<serde_json::Value> {
+        // The same bytes the Kotlin counterpart answers with, so the two
+        // reference routes measure the same work rather than differing by a
+        // content type.
+        Json(serde_json::json!({ "status": "ok" }))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Kafka consumer
 // ---------------------------------------------------------------------------
